@@ -1,0 +1,14 @@
+[workspace]
+members = ["xtask"]
+
+[package]
+name = "loaphuong"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug" }
+hound = "3.5"
