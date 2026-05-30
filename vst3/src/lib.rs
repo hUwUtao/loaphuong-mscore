@@ -48,7 +48,9 @@ impl Default for Loaphuong {
 		let wav_path = std::env::var("LOAPHUONG_WAV_PATH")
 			.map(PathBuf::from)
 			.unwrap_or_else(|_| {
-				let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+				let home = std::env::var("HOME")
+					.or_else(|_| std::env::var("USERPROFILE"))
+					.unwrap_or_else(|_| "/tmp".to_string());
 				PathBuf::from(home).join(".cache/loaphuong/render.wav")
 			});
 
