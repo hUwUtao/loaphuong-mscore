@@ -146,6 +146,7 @@ MuseScore {
 
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
+		var tempo = curScore.tempo || 120
 		var div = curScore.division || 480
 		var measureLen = div * sigN * 4 / sigD
 		var allNotes = []
@@ -196,6 +197,7 @@ MuseScore {
 				xml += '<time><beats>' + sigN + '</beats><beat-type>' + sigD + '</beat-type></time>\n'
 				xml += '<clef><sign>G</sign><line>2</line></clef>\n'
 				xml += '</attributes>\n'
+				xml += '<direction placement="above"><direction-type><words>♩ = ' + tempo + '</words></direction-type><sound tempo="' + tempo + '"/></direction>\n'
 			}
 			var mEnd = m * measureLen
 			if (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
