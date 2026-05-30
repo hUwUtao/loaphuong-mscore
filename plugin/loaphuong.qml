@@ -34,80 +34,173 @@ MuseScore {
 		}
 	}
 
+	function pitchToStep(p) {
+		var steps = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+		return steps[p % 12]
+	}
+
+	function pitchToOctave(p) {
+		return Math.floor(p / 12) - 1
+	}
+
+	function generateMusicXml() {
+		var sigN = curScore.timesigNumerator || 4
+		var sigD = curScore.timesigDenominator || 4
+
+		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
+		xml += '<score-partwise version="4.0">\n'
+		xml += '  <part-list>\n'
+		xml += '    <score-part id="P1">\n'
+		xml += '      <part-name>Voice</part-name>\n'
+		xml += '    </score-part>\n'
+		xml += '  </part-list>\n'
+		xml += '  <part id="P1">\n'
+
+		var cursor = curScore.newCursor()
+		cursor.rewind(0)
+		var measureNum = 0
+
+		while (cursor.segment) {
+			var el = cursor.element
+			if (el && el.type === Element.MEASURE) {
+				measureNum++
+				xml += '    <measure number="' + measureNum + '">\n'
+
+				if (measureNum === 1) {
+					xml += '      <attributes>\n'
+					xml += '        <divisions>1</divisions>\n'
+					xml += '        <time>\n'
+					xml += '          <beats>' + sigN + '</beats>\n'
+					xml += '          <beat-type>' + sigD + '</beat-type>\n'
+					xml += '        </time>\n'
+					xml += '        <clef>\n'
+					xml += '          <sign>G</sign>\n'
+					xml += '          <line>2</line>\n'
+					xml += '        </clef>\n'
+					xml += '      </attributes>\n'
+				}
+
+				cursor.next()
+
+				while (cursor.segment && cursor.element && cursor.element.type !== Element.MEASURE) {
+					var e = cursor.element
+
+					if (e.type === Element.CHORD) {
+						var chord = e
+						if (chord.notes && chord.notes.length > 0) {
+							var note = chord.notes[0]
+							var dur = chord.duration ? chord.duration.ticks : 1
+							var step = pitchToStep(note.pitch)
+							var oct = pitchToOctave(note.pitch)
+
+							xml += '      <note>\n'
+							if (note.pitch !== undefined && note.pitch !== null) {
+								xml += '        <pitch>\n'
+								xml += '          <step>' + step + '</step>\n'
+								xml += '          <octave>' + oct + '</octave>\n'
+								xml += '        </pitch>\n'
+							} else {
+								xml += '        <rest/>\n'
+							}
+							xml += '        <duration>' + dur + '</duration>\n'
+							xml += '        <type>quarter</type>\n'
+
+							if (chord.lyrics && chord.lyrics.length > 0) {
+								var l = chord.lyrics[0]
+								var txt = l.text || ""
+								if (txt.length > 0) {
+									var syl = "single"
+									if (l.syllabic === 0) syl = "single"
+									else if (l.syllabic === 1) syl = "begin"
+									else if (l.syllabic === 2) syl = "end"
+									else if (l.syllabic === 3) syl = "middle"
+									xml += '        <lyric>\n'
+									xml += '          <syllabic>' + syl + '</syllabic>\n'
+									xml += '          <text>' + escapeXml(txt) + '</text>\n'
+									xml += '        </lyric>\n'
+								}
+							}
+
+							xml += '      </note>\n'
+						}
+					} else if (e.type === Element.REST) {
+						var rest = e
+						var dur = rest.duration ? rest.duration.ticks : 1
+						xml += '      <note>\n'
+						xml += '        <rest/>\n'
+						xml += '        <duration>' + dur + '</duration>\n'
+						xml += '        <type>quarter</type>\n'
+						xml += '      </note>\n'
+					}
+
+					cursor.next()
+				}
+
+				xml += '    </measure>\n'
+			} else {
+				cursor.next()
+			}
+		}
+
+		xml += '  </part>\n'
+		xml += '</score-partwise>\n'
+		return xml
+	}
+
+	function escapeXml(s) {
+		return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;")
+	}
+
 	function startRender() {
 		if (rendering || !curScore) return
-
-		var ts = new Date().getTime()
-		var tmp = Qt.formatDate(new Date(), "yyyyMMdd") + "_" + ts
-
-		// Try to write to a temp location the backend can reach
-		var path = "/tmp/loaphuong_" + tmp + ".musicxml"
-
-		try {
-			var ok = curScore.writeScore(path)
-			console.log("loaphuong: writeScore(" + path + ") = " + ok)
-			if (!ok) {
-				// Fallback: try without leading slash, some MS versions
-				path = "loaphuong_" + tmp + ".musicxml"
-				ok = curScore.writeScore(path)
-				console.log("loaphuong: writeScore fallback = " + ok)
-				if (!ok) {
-					phase = "Export failed (check console)"
-					return
-				}
-			}
-		} catch (e) {
-			console.log("loaphuong: writeScore threw: " + e)
-			phase = "Export error: " + e
-			return
-		}
 
 		rendering = true
 		hasRender = false
 		progress = 0.0
-		phase = "Sending request..."
+		phase = "Generating MusicXML..."
 		resultPath = ""
 
 		try {
+			var musicXml = generateMusicXml()
+			phase = "Sending request..."
+
 			var xhr = new XMLHttpRequest()
 			xhr.open("POST", backendUrl + "/api/render")
 			xhr.setRequestHeader("Content-Type", "application/json")
 
 			xhr.onreadystatechange = function() {
 				try {
-					if (xhr.readyState === 3) { // LOADING
-						var text = xhr.responseText || ""
-						if (text.length > 0) phase = "Processing..."
+					if (xhr.readyState === 3) {
+						phase = "Processing..."
 					}
-					if (xhr.readyState === 4) { // DONE
+					if (xhr.readyState === 4) {
 						if (xhr.status === 200) {
 							var result = JSON.parse(xhr.responseText)
 							resultPath = result.wavPath || ""
 							hasRender = true
 							phase = "Done!"
 						} else {
-							phase = "Server: " + xhr.status + " " + xhr.statusText
+							phase = "Error: " + xhr.status
 						}
 						rendering = false
 						progress = 1.0
 					}
 				} catch (e) {
-					console.log("loaphuong: xhr error: " + e)
+					console.log("loaphuong: xhr cb error: " + e)
 				}
 			}
 
 			var body = JSON.stringify({
-				musicxml: path,
+				musicxml: musicXml,
 				voice: voice,
 				model: model,
 			})
 
-			console.log("loaphuong: sending POST to " + backendUrl + "/api/render")
 			xhr.send(body)
-			console.log("loaphuong: request sent")
 		} catch (e) {
-			console.log("loaphuong: XHR failed: " + e)
-			phase = "XHR failed: " + e
+			console.log("loaphuong: render error: " + e)
+			phase = "Error: " + e
 			rendering = false
 		}
 	}
