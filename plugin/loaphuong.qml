@@ -294,6 +294,15 @@ MuseScore {
 			}
 
 			Button {
+				text: "Play"
+				enabled: hasRender && resultPath !== ""
+				onClicked: {
+					if (resultPath)
+						Qt.openUrlExternally("file://" + resultPath)
+				}
+			}
+
+			Button {
 				text: "Cancel"
 				enabled: rendering
 				onClicked: {
