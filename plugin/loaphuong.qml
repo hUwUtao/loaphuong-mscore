@@ -43,11 +43,31 @@ MuseScore {
 		return Math.floor(p / 12) - 1
 	}
 
+	function findVocalTrack() {
+		if (!curScore) return 0
+		var bestTrack = 0, bestCount = -1
+		for (var t = 0; t < curScore.ntracks; t++) {
+			var c = curScore.newCursor()
+			c.track = t
+			c.rewind(0)
+			var count = 0
+			while (c.segment) {
+				var e = c.element
+				if (e && e.type === Element.CHORD && e.lyrics && e.lyrics.length > 0)
+					count += e.lyrics.length
+				c.next()
+			}
+			if (count > bestCount) { bestCount = count; bestTrack = t }
+		}
+		return bestTrack
+	}
+
 	function generateMusicXml() {
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
 		var div = typeof curScore.division !== "undefined" ? curScore.division
 			: typeof division !== "undefined" ? division : 480
+		var track = findVocalTrack()
 
 		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
 		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
@@ -60,6 +80,7 @@ MuseScore {
 		xml += '  <part id="P1">\n'
 
 		var cursor = curScore.newCursor()
+		cursor.track = track
 		cursor.rewind(0)
 		var measureNum = 0
 
