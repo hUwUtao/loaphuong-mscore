@@ -48,51 +48,75 @@ MuseScore {
 	function generateMusicXml() {
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
-		var div = typeof curScore.division !== "undefined" ? curScore.division
-			: typeof division !== "undefined" ? division : 480
+		var div = curScore.division || 480
 
-		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
-		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
-		xml += '<score-partwise version="4.0">\n'
-		xml += '<part-list>\n'
-		xml += '<score-part id="P1">\n'
-		xml += '<part-name>Voice</part-name>\n'
-		xml += '</score-part>\n'
-		xml += '</part-list>\n'
-		xml += '<part id="P1">\n'
-
+		// DEBUG: just dump segment info
+		var info = "track0 scan:\n"
 		var cursor = curScore.newCursor()
 		cursor.rewind(Cursor.SCORE_START)
-		var measureNum = 0
-		var measureTicks = div * sigN * (4 / sigD)
-		var lastMeasureTick = -1
-
-		while (cursor.segment) {
-			var tick = cursor.tick
-
-			// Detect measure boundary: tick crosses a measure line
-			if (lastMeasureTick < 0 || tick >= lastMeasureTick + measureTicks) {
-				// Close previous measure
-				if (lastMeasureTick >= 0)
-					xml += '</measure>\n'
-
-				measureNum++
-				lastMeasureTick = tick
-				xml += '<measure number="' + measureNum + '">\n'
-
-				if (measureNum === 1) {
-					xml += '<attributes>\n'
-					xml += '<divisions>' + div + '</divisions>\n'
-					xml += '<time>\n'
-					xml += '<beats>' + sigN + '</beats>\n'
-					xml += '<beat-type>' + sigD + '</beat-type>\n'
-					xml += '</time>\n'
-					xml += '<clef>\n'
-					xml += '<sign>G</sign>\n'
-					xml += '<line>2</line>\n'
-					xml += '</clef>\n'
-					xml += '</attributes>\n'
+		var segs = 0, chords = 0, lyrics = 0
+		while (cursor.segment && ++segs < 100) {
+			var e = cursor.element
+			if (e) {
+				info += "seg" + segs + " t=" + cursor.tick + " type=" + e.type
+				if (e.type === Element.CHORD) {
+					chords++
+					info += " notes=" + (e.notes ? e.notes.length : 0)
+					if (e.lyrics) {
+						lyrics += e.lyrics.length
+						info += " lyrics=" + e.lyrics.length + "[" + e.lyrics[0].text + "]"
+					}
 				}
+				info += "\n"
+			}
+			cursor.next()
+		}
+		info += "total: segs=" + segs + " chords=" + chords + " lyrics=" + lyrics
+
+		// Wrap in minimal MusicXML so backend can report parse error
+		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+		xml += '<score-partwise version="4.0">\n'
+		xml += '<part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>\n'
+		xml += '<part id="P1"><measure number="1">\n'
+		xml += '<attributes><divisions>' + div + '</divisions>'
+		xml += '<time><beats>' + sigN + '</beats><beat-type>' + sigD + '</beat-type></time>'
+		xml += '<clef><sign>G</sign><line>2</line></clef>'
+		xml += '</attributes>\n'
+
+		// Emit notes from track0 chords
+		var cursor2 = curScore.newCursor()
+		cursor2.rewind(Cursor.SCORE_START)
+		var safety = 0
+		while (cursor2.segment && ++safety < 5000) {
+			var e = cursor2.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				var n = e.notes[0]
+				xml += '<note><pitch><step>' + pitchToStep(n.pitch) + '</step>'
+				xml += '<octave>' + pitchToOctave(n.pitch) + '</octave></pitch>'
+				xml += '<duration>' + (e.duration ? e.duration.ticks : 1) + '</duration>'
+				xml += '<type>quarter</type>'
+				if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+					var syl = ["single","begin","end","middle"][e.lyrics[0].syllabic] || "single"
+					xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(e.lyrics[0].text) + '</text></lyric>'
+				}
+				xml += '</note>\n'
+			}
+			cursor2.next()
+		}
+
+		xml += '</measure></part></score-partwise>\n'
+
+		lastXml = info + "\n\n---\n\nMusicXML:\n" + xml.slice(0, 1000)
+		return xml
+	}
+			} else if (tick >= lastMeasureTick + measureLen) {
+				xml += '</measure>\n'
+				lastMeasureTick += measureLen
+				measureNum++
+				xml += '<measure number="' + measureNum + '">\n'
+			} else if (tick < lastMeasureTick) {
+				// Tick went backward (shouldn't happen, but safety)
+				break
 			}
 
 			var e = cursor.element
@@ -122,8 +146,7 @@ MuseScore {
 			cursor.next()
 		}
 
-		// Close last measure
-		if (lastMeasureTick >= 0)
+		if (measureNum > 0)
 			xml += '</measure>\n'
 
 				cursor.next()
