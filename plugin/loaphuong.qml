@@ -49,103 +49,77 @@ MuseScore {
 		var div = typeof curScore.division !== "undefined" ? curScore.division
 			: typeof division !== "undefined" ? division : 480
 
-		var nstaves = curScore.nstaves || 1
-
 		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
 		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
 		xml += '<score-partwise version="4.0">\n'
-		xml += '  <part-list>\n'
-		for (var st = 0; st < nstaves; st++) {
-			var pid = "P" + (st + 1)
-			var pn = curScore.staves ? (curScore.staves[st].partName || "Part " + (st + 1)) : "Part " + (st + 1)
-			xml += '    <score-part id="' + pid + '">\n'
-			xml += '      <part-name>' + escapeXml(pn) + '</part-name>\n'
-			xml += '    </score-part>\n'
-		}
-		xml += '  </part-list>\n'
+		xml += '<part-list>\n'
+		xml += '<score-part id="P1">\n'
+		xml += '<part-name>Voice</part-name>\n'
+		xml += '</score-part>\n'
+		xml += '</part-list>\n'
+		xml += '<part id="P1">\n'
 
-		var restDur = div * sigN * (4 / sigD)
+		var cursor = curScore.newCursor()
+		cursor.rewind(0)
+		var measureNum = 0
 
-		// One part per staff
-		for (var st = 0; st < nstaves; st++) {
-			var pid = "P" + (st + 1)
-			xml += '  <part id="' + pid + '">\n'
+		while (cursor.segment) {
+			var el = cursor.element
+			if (el && el.type === Element.MEASURE) {
+				measureNum++
+				xml += '<measure number="' + measureNum + '">\n'
 
-			var cursor = curScore.newCursor()
-			cursor.track = st * 4
-			cursor.rewind(0)
-			var measureNum = 0
+				if (measureNum === 1) {
+					xml += '<attributes>\n'
+					xml += '<divisions>' + div + '</divisions>\n'
+					xml += '<time>\n'
+					xml += '<beats>' + sigN + '</beats>\n'
+					xml += '<beat-type>' + sigD + '</beat-type>\n'
+					xml += '</time>\n'
+					xml += '<clef>\n'
+					xml += '<sign>G</sign>\n'
+					xml += '<line>2</line>\n'
+					xml += '</clef>\n'
+					xml += '</attributes>\n'
+				}
 
-			while (cursor.segment) {
-				var el = cursor.element
-				if (el && el.type === Element.MEASURE) {
-					measureNum++
-					xml += '    <measure number="' + measureNum + '">\n'
+				cursor.next()
 
-					if (st === 0 && measureNum === 1) {
-						xml += '      <attributes>\n'
-						xml += '        <divisions>' + div + '</divisions>\n'
-						xml += '        <time>\n'
-						xml += '          <beats>' + sigN + '</beats>\n'
-						xml += '          <beat-type>' + sigD + '</beat-type>\n'
-						xml += '        </time>\n'
-						xml += '        <clef>\n'
-						xml += '          <sign>G</sign>\n'
-						xml += '          <line>2</line>\n'
-						xml += '        </clef>\n'
-						xml += '      </attributes>\n'
-						// Lead-in silence for NEUTRINO pau
-						xml += '      <note>\n'
-						xml += '        <rest/>\n'
-						xml += '        <duration>' + restDur + '</duration>\n'
-						xml += '        <type>whole</type>\n'
-						xml += '      </note>\n'
-					}
-
-					cursor.next()
-					while (cursor.segment && cursor.element && cursor.element.type !== Element.MEASURE) {
-						var e = cursor.element
-						if (e.type === Element.CHORD && e.notes && e.notes.length > 0) {
-							var chord = e
-							var note = chord.notes[0]
-							var dur = chord.duration ? chord.duration.ticks : 1
-							xml += '      <note>\n'
-							xml += '        <pitch>\n'
-							xml += '          <step>' + pitchToStep(note.pitch) + '</step>\n'
-							xml += '          <octave>' + pitchToOctave(note.pitch) + '</octave>\n'
-							xml += '        </pitch>\n'
-							xml += '        <duration>' + dur + '</duration>\n'
-							xml += '        <type>quarter</type>\n'
-							if (chord.lyrics && chord.lyrics.length > 0) {
-								var l = chord.lyrics[0]
-								var txt = l.text || ""
-								if (txt.length > 0) {
-									var syl = ["single","begin","end","middle"][l.syllabic] || "single"
-									xml += '        <lyric>\n'
-									xml += '          <syllabic>' + syl + '</syllabic>\n'
-									xml += '          <text>' + escapeXml(txt) + '</text>\n'
-									xml += '        </lyric>\n'
-								}
+				while (cursor.segment && cursor.element && cursor.element.type !== Element.MEASURE) {
+					var e = cursor.element
+					if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+						var note = e.notes[0]
+						var dur = e.duration ? e.duration.ticks : 1
+						xml += '<note>\n'
+						xml += '<pitch>\n'
+						xml += '<step>' + pitchToStep(note.pitch) + '</step>\n'
+						xml += '<octave>' + pitchToOctave(note.pitch) + '</octave>\n'
+						xml += '</pitch>\n'
+						xml += '<duration>' + dur + '</duration>\n'
+						xml += '<type>quarter</type>\n'
+						if (e.lyrics && e.lyrics.length > 0) {
+							var txt = e.lyrics[0].text || ""
+							if (txt.length > 0) {
+								var syl = ["single","begin","end","middle"][e.lyrics[0].syllabic] || "single"
+								xml += '<lyric>\n'
+								xml += '<syllabic>' + syl + '</syllabic>\n'
+								xml += '<text>' + escapeXml(txt) + '</text>\n'
+								xml += '</lyric>\n'
 							}
-							xml += '      </note>\n'
-						} else if (e && e.type === Element.REST) {
-							var dur = e.duration ? e.duration.ticks : 1
-							xml += '      <note>\n'
-							xml += '        <rest/>\n'
-							xml += '        <duration>' + dur + '</duration>\n'
-							xml += '        <type>quarter</type>\n'
-							xml += '      </note>\n'
 						}
-						cursor.next()
+						xml += '</note>\n'
 					}
-
-					xml += '    </measure>\n'
-				} else {
 					cursor.next()
 				}
+
+				xml += '</measure>\n'
+			} else {
+				cursor.next()
 			}
-			xml += '  </part>\n'
 		}
+
+		xml += '</part>\n'
+		xml += '</score-partwise>\n'
 
 		xml += '  </part>\n'
 		xml += '</score-partwise>\n'
