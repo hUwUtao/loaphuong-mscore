@@ -62,10 +62,30 @@ NEUTRINO_ROOT=/path/to/NEUTRINO bun run ../loaphuong/src/main.ts
 # Start gen backend (compiled)
 NEUTRINO_ROOT=/path/to/NEUTRINO ../loaphuong/loaphuong-linux
 
-# Build VST3
+# Build VST3 (Linux)
 cd vst3 && cargo run --package xtask -- bundle loaphuong --release
 
-# Install QML plugin
+# Cross-build VST3 for Windows
+cd vst3 && cargo build --package loaphuong --target x86_64-pc-windows-gnu --release --lib
+mkdir -p target/bundled/loaphuong.vst3/Contents/x86_64-windows
+cp target/x86_64-pc-windows-gnu/release/loaphuong.dll target/bundled/loaphuong.vst3/Contents/x86_64-windows/
+
+# Build backend exe for Windows
+cd ../loaphuong && bun build --compile --target=bun-windows-x64 src/main.ts --outfile=loaphuong
+
+# Package Windows dist
+mkdir -p /tmp/loaphuong-win-dist/loaphuong.vst3/Contents/x86_64-windows
+cp loaphuong.exe /tmp/loaphuong-win-dist/
+cp vst3/target/x86_64-pc-windows-gnu/release/loaphuong.dll /tmp/loaphuong-win-dist/loaphuong.vst3/Contents/x86_64-windows/
+cp plugin/loaphuong.qml /tmp/loaphuong-win-dist/
+
+# Deploy VST3 on Windows
+xcopy /s /e loaphuong.vst3 %USERPROFILE%\Documents\VST3\loaphuong.vst3
+
+# Deploy QML plugin on Windows
+copy loaphuong.qml %USERPROFILE%\Documents\MuseScore4\Plugins\loaphuong\
+
+# Install QML plugin (Linux/macOS)
 cp plugin/loaphuong.qml ~/Documents/MuseScore4/Plugins/loaphuong/
 ```
 
