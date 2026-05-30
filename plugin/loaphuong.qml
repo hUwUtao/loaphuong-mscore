@@ -46,6 +46,8 @@ MuseScore {
 	function generateMusicXml() {
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
+		var div = typeof curScore.division !== "undefined" ? curScore.division
+			: typeof division !== "undefined" ? division : 480
 
 		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
 		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
@@ -69,7 +71,7 @@ MuseScore {
 
 				if (measureNum === 1) {
 					xml += '      <attributes>\n'
-					xml += '        <divisions>1</divisions>\n'
+					xml += '        <divisions>' + div + '</divisions>\n'
 					xml += '        <time>\n'
 					xml += '          <beats>' + sigN + '</beats>\n'
 					xml += '          <beat-type>' + sigD + '</beat-type>\n'
