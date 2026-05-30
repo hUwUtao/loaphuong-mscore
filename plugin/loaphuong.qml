@@ -71,7 +71,7 @@ MuseScore {
 		return -1
 	}
 
-	// Write phonemes as Lyric Line 2 — match by tick from noteList
+	// Write phonemes as Lyric Line 2 — only if note doesn't already have override text
 	function writePhonemesToScore(exportData, noteList) {
 		var target = findVocalTrack()
 		if (!noteList || noteList.length === 0) return
@@ -84,6 +84,9 @@ MuseScore {
 			var e = cursor.element
 			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0
 				&& e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+				// Skip if Lyric 2 already has user override text
+				if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text && e.lyrics[1].text.length > 0)
+					continue
 				var ni = findNoteIdxByTick(cursor.tick, noteList)
 				if (ni >= 0) {
 					var phones = exportData[noteList[ni].id]
