@@ -45,72 +45,105 @@ MuseScore {
 		return Math.floor(p / 12) - 1
 	}
 
-	function generateMusicXml() {
-		var sigN = curScore.timesigNumerator || 4
-		var sigD = curScore.timesigDenominator || 4
-		var div = curScore.division || 480
-		var measureLen = div * sigN * 4 / sigD
+	function getExportPath() {
+		return "/tmp/loaphuong_export.musicxml"
+	}
 
-		// Scan all tracks to find chords
-		var info = "scanning all tracks:\n"
+	function findVocalTrack() {
 		var nstaves = curScore.nstaves || 1
-		var allNotes = []
-
 		for (var t = 0; t < nstaves * 4; t++) {
 			var cursor = curScore.newCursor()
 			cursor.track = t
 			cursor.rewind(Cursor.SCORE_START)
-			var segs = 0, found = 0
-			while (cursor.segment && ++segs < 100) {
+			var safety = 0
+			while (cursor.segment && ++safety < 500) {
 				var e = cursor.element
-				if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
-					found++
-					var lrc = null
-					if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text)
-						lrc = e.lyrics[0]
-					allNotes.push({
-						tick: cursor.tick, track: t,
-						note: e.notes[0],
-						dur: e.duration ? e.duration.ticks : 1,
-						lyric: lrc
-					})
-					if (segs <= 5)
-						info += "  track" + t + " seg" + segs + " t=" + cursor.tick
-							+ " pitch=" + e.notes[0].pitch
-							+ (lrc ? " lyric=" + lrc.text : "") + "\n"
+				if (e && e.type === Element.CHORD && e.lyrics && e.lyrics.length > 0) {
+					return t
 				}
 				cursor.next()
 			}
-			if (found > 0)
-				info += "track" + t + ": " + found + " chords\n"
+		}
+		return 0
+	}
+
+	function generateMusicXml() {
+		var nstaves = curScore.nstaves || 1
+		var target = findVocalTrack()
+		var info = "target track=" + target + " nstaves=" + nstaves + "\n"
+
+		// Try writeScore (destructive isolation + export + undo)
+		var exportPath = getExportPath()
+		try {
+			curScore.startCmd()
+			for (var t = 0; t < nstaves * 4; t++) {
+				if (t !== target) {
+					var dc = curScore.newCursor()
+					dc.track = t
+					dc.rewind(Cursor.SCORE_START)
+					while (dc.segment) {
+						var el = dc.element
+						if (el) curScore.removeElement(el)
+						dc.next()
+					}
+				}
+			}
+			var ok = writeScore(curScore, exportPath, "musicxml")
+			curScore.endCmd()
+			cmd("undo")
+			if (ok) {
+				info += "writeScore -> " + exportPath
+				lastXml = info
+				return { path: exportPath, xml: "" }
+			}
+		} catch (e) {
+			try { curScore.endCmd() } catch (_) {}
+			try { cmd("undo") } catch (_) {}
+			info += "writeScore failed: " + e + "\n"
 		}
 
-		// Sort all notes by tick
+		// Fallback: manual generation from all tracks
+		info += "Falling back to manual generation\n"
+		var sigN = curScore.timesigNumerator || 4
+		var sigD = curScore.timesigDenominator || 4
+		var div = curScore.division || 480
+		var measureLen = div * sigN * 4 / sigD
+		var allNotes = []
+
+		var fallbackCursor = curScore.newCursor()
+		fallbackCursor.track = target
+		fallbackCursor.rewind(Cursor.SCORE_START)
+		var segs = 0
+		while (fallbackCursor.segment && ++segs < 500) {
+			var e = fallbackCursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				var lrc = e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text ? e.lyrics[0] : null
+				allNotes.push({
+					tick: fallbackCursor.tick,
+					note: e.notes[0],
+					dur: e.duration ? e.duration.ticks : 1,
+					lyric: lrc
+				})
+			}
+			fallbackCursor.next()
+		}
 		allNotes.sort(function(a, b) { return a.tick - b.tick })
 
-		// Determine total ticks
 		var totalTicks = 0
 		var ec = curScore.newCursor()
 		ec.rewind(Cursor.SCORE_END)
-		if (ec.segment)
-			totalTicks = ec.tick
+		if (ec.segment) totalTicks = ec.tick
 		if (totalTicks <= 0 && allNotes.length > 0)
 			totalTicks = allNotes[allNotes.length - 1].tick + measureLen
-		if (totalTicks <= 0)
-			totalTicks = measureLen * 10
+		if (totalTicks <= 0) totalTicks = measureLen * 10
 
 		var numMeasures = Math.ceil(totalTicks / measureLen)
-		info += "\nmeasures=" + numMeasures + " totalTicks=" + totalTicks
-			+ " measureLen=" + measureLen
 
-		// Generate MusicXML with proper measure boundaries
 		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
 		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN"'
 			+ ' "http://www.musicxml.org/dtds/partwise.dtd">\n'
 		xml += '<score-partwise version="4.0">\n'
-		xml += '<part-list>\n'
-		xml += '<score-part id="P1"><part-name>Voice</part-name></score-part>\n'
-		xml += '</part-list>\n'
+		xml += '<part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>\n'
 		xml += '<part id="P1">\n'
 
 		var noteIdx = 0
@@ -119,47 +152,29 @@ MuseScore {
 			if (m === 1) {
 				xml += '<attributes>\n'
 				xml += '<divisions>' + div + '</divisions>\n'
-				xml += '<time>\n'
-				xml += '<beats>' + sigN + '</beats>\n'
-				xml += '<beat-type>' + sigD + '</beat-type>\n'
-				xml += '</time>\n'
-				xml += '<clef>\n'
-				xml += '<sign>G</sign>\n'
-				xml += '<line>2</line>\n'
-				xml += '</clef>\n'
+				xml += '<time><beats>' + sigN + '</beats><beat-type>' + sigD + '</beat-type></time>\n'
+				xml += '<clef><sign>G</sign><line>2</line></clef>\n'
 				xml += '</attributes>\n'
 			}
-
-			var mStart = (m - 1) * measureLen
 			var mEnd = m * measureLen
 			while (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
-				var an = allNotes[noteIdx]
-				xml += '<note>\n'
-				xml += '<pitch>\n'
-				xml += '<step>' + pitchToStep(an.note.pitch) + '</step>\n'
-				xml += '<octave>' + pitchToOctave(an.note.pitch) + '</octave>\n'
-				xml += '</pitch>\n'
-				xml += '<duration>' + an.dur + '</duration>\n'
-				xml += '<type>quarter</type>\n'
+				var an = allNotes[noteIdx++]
+				xml += '<note><pitch><step>' + pitchToStep(an.note.pitch) + '</step>'
+					+ '<octave>' + pitchToOctave(an.note.pitch) + '</octave></pitch>'
+					+ '<duration>' + an.dur + '</duration><type>quarter</type>'
 				if (an.lyric) {
 					var syl = ["single","begin","end","middle"][an.lyric.syllabic] || "single"
-					xml += '<lyric>\n'
-					xml += '<syllabic>' + syl + '</syllabic>\n'
-					xml += '<text>' + escapeXml(an.lyric.text) + '</text>\n'
-					xml += '</lyric>\n'
+					xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(an.lyric.text) + '</text></lyric>'
 				}
 				xml += '</note>\n'
-				noteIdx++
 			}
-
 			xml += '</measure>\n'
 		}
+		xml += '</part>\n</score-partwise>\n'
 
-		xml += '</part>\n'
-		xml += '</score-partwise>\n'
-
-		lastXml = info + "\n\n---\n\nMusicXML:\n" + xml.slice(0, 1500)
-		return xml
+		info += "measures=" + numMeasures + " notes=" + allNotes.length
+		lastXml = info + "\n---\n" + xml.slice(0, 1500)
+		return { path: "", xml: xml }
 	}
 
 	function escapeXml(s) {
@@ -176,7 +191,9 @@ MuseScore {
 		resultPath = ""
 
 		try {
-			var musicXml = generateMusicXml()
+			var result = generateMusicXml()
+			var musicXml = result.xml
+			var exportPath = result.path
 			lastXml = musicXml.length > 2000 ? musicXml.slice(0, 2000) + "..." : musicXml
 			lastError = ""
 			phase = "Sending request..."
@@ -192,8 +209,8 @@ MuseScore {
 					}
 					if (xhr.readyState === 4) {
 						if (xhr.status === 200) {
-							var result = JSON.parse(xhr.responseText)
-							resultPath = result.wavPath || ""
+							var res = JSON.parse(xhr.responseText)
+							resultPath = res.wavPath || ""
 							hasRender = true
 							phase = "Done!"
 						} else {
@@ -208,8 +225,13 @@ MuseScore {
 				}
 			}
 
-			var body = JSON.stringify({
-				musicxml: musicXml,
+			var bodyObj = { voice: voice, model: model }
+			if (exportPath) {
+				bodyObj.scorePath = exportPath
+			} else {
+				bodyObj.musicxml = musicXml
+			}
+			var body = JSON.stringify(bodyObj)
 				voice: voice,
 				model: model,
 			})
