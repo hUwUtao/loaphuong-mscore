@@ -15,10 +15,8 @@ MuseScore {
 	property bool rendering: false
 	property bool hasRender: false
 	property real progress: 0.0
-	property string phase: ""
-	property string eta: ""
+	property string phase: "Ready"
 	property string resultPath: ""
-	property var phraseProgress: ({})
 
 	menuPath: "Plugins.loaphuong.Render Vocal"
 	description: "Render vocal track via Loaphuong gen backend"
@@ -29,73 +27,89 @@ MuseScore {
 	onRun: {
 		try {
 			console.log("loaphuong: onRun, score=" + (curScore ? curScore.title : "none"))
+			phase = curScore ? "Ready — " + curScore.title : "No score open"
 		} catch (e) {
 			console.log("loaphuong: onRun error: " + e)
+			phase = "Init error: " + e
 		}
 	}
 
 	function startRender() {
-		if (rendering || !voice) return
+		if (rendering || !curScore) return
 
 		var ts = new Date().getTime()
-		if (!curScore) {
-			phase = "No score open"
-			return
-		}
+		var tmp = Qt.formatDate(new Date(), "yyyyMMdd") + "_" + ts
 
-		var path = Qt.formatDate(new Date(), "yyyyMMdd") + "_" + ts + ".musicxml"
-		var ok = curScore.writeScore(path)
-		if (!ok) {
-			phase = "Export failed"
+		// Try to write to a temp location the backend can reach
+		var path = "/tmp/loaphuong_" + tmp + ".musicxml"
+
+		try {
+			var ok = curScore.writeScore(path)
+			console.log("loaphuong: writeScore(" + path + ") = " + ok)
+			if (!ok) {
+				// Fallback: try without leading slash, some MS versions
+				path = "loaphuong_" + tmp + ".musicxml"
+				ok = curScore.writeScore(path)
+				console.log("loaphuong: writeScore fallback = " + ok)
+				if (!ok) {
+					phase = "Export failed (check console)"
+					return
+				}
+			}
+		} catch (e) {
+			console.log("loaphuong: writeScore threw: " + e)
+			phase = "Export error: " + e
 			return
 		}
 
 		rendering = true
 		hasRender = false
 		progress = 0.0
-		phase = "Exporting..."
+		phase = "Sending request..."
 		resultPath = ""
-		phraseProgress = ({})
 
-		var xhr = new XMLHttpRequest()
-		xhr.open("POST", backendUrl + "/api/render")
-		xhr.setRequestHeader("Content-Type", "application/json")
+		try {
+			var xhr = new XMLHttpRequest()
+			xhr.open("POST", backendUrl + "/api/render")
+			xhr.setRequestHeader("Content-Type", "application/json")
 
-		xhr.onreadystatechange = function() {
-			if (xhr.readyState === XMLHttpRequest.LOADING) {
+			xhr.onreadystatechange = function() {
 				try {
-					var text = xhr.responseText || ""
-					var lines = text.trim().split("\n")
-					for (var i = 0; i < lines.length; i++) {
-						var ev = JSON.parse(lines[i])
-						if (ev.phase) phase = ev.phase
-						if (ev.progress !== undefined) progress = ev.progress
+					if (xhr.readyState === 3) { // LOADING
+						var text = xhr.responseText || ""
+						if (text.length > 0) phase = "Processing..."
 					}
-				} catch (_) {}
-			}
-			if (xhr.readyState === XMLHttpRequest.DONE) {
-				if (xhr.status === 200) {
-					try {
-						var result = JSON.parse(xhr.responseText)
-						resultPath = result.wavPath || ""
-						hasRender = true
-						phase = "Done!"
-					} catch (e) {
-						phase = "Parse error"
+					if (xhr.readyState === 4) { // DONE
+						if (xhr.status === 200) {
+							var result = JSON.parse(xhr.responseText)
+							resultPath = result.wavPath || ""
+							hasRender = true
+							phase = "Done!"
+						} else {
+							phase = "Server: " + xhr.status + " " + xhr.statusText
+						}
+						rendering = false
+						progress = 1.0
 					}
-				} else {
-					phase = "Error: " + xhr.status
+				} catch (e) {
+					console.log("loaphuong: xhr error: " + e)
 				}
-				rendering = false
-				progress = 1.0
 			}
-		}
 
-		xhr.send(JSON.stringify({
-			musicxml: path,
-			voice: voice,
-			model: model,
-		}))
+			var body = JSON.stringify({
+				musicxml: path,
+				voice: voice,
+				model: model,
+			})
+
+			console.log("loaphuong: sending POST to " + backendUrl + "/api/render")
+			xhr.send(body)
+			console.log("loaphuong: request sent")
+		} catch (e) {
+			console.log("loaphuong: XHR failed: " + e)
+			phase = "XHR failed: " + e
+			rendering = false
+		}
 	}
 
 	ColumnLayout {
@@ -116,7 +130,6 @@ MuseScore {
 
 				Label { text: "Model" }
 				ComboBox {
-					id: voiceCombo
 					Layout.fillWidth: true
 					model: ["merrow", "nakumo", "reina", "runo", "soma", "zunko"]
 					currentIndex: 0
@@ -147,14 +160,17 @@ MuseScore {
 			Button {
 				text: rendering ? "Rendering..." : "Render"
 				Layout.fillWidth: true
-				enabled: !rendering && curScore !== null
+				enabled: !rendering && curScore != null
 				onClicked: startRender()
 			}
 
 			Button {
 				text: "Cancel"
 				enabled: rendering
-				onClicked: rendering = false
+				onClicked: {
+					rendering = false
+					phase = "Cancelled"
+				}
 			}
 		}
 
@@ -166,23 +182,18 @@ MuseScore {
 		}
 
 		Label {
-			text: {
-				if (curScore) return (curScore.title || "Untitled") + " \u00B7 " + curScore.nmeasures + " measures"
-				return "No score open"
-			}
-			color: "#94a3b8"
-			font.pixelSize: 11
-		}
-
-		Label {
-			text: phase + (eta ? " (" + eta + ")" : "")
+			text: phase
 			visible: phase !== ""
 			color: hasRender ? "#22c55e" : "#64748b"
 			font.pixelSize: 12
 		}
 
-		Item {
-			Layout.fillHeight: true
+		Item { Layout.fillHeight: true }
+
+		Label {
+			text: curScore ? (curScore.title || "Untitled") + " \u00B7 " + curScore.nmeasures + " measures" : "No score open"
+			color: "#94a3b8"
+			font.pixelSize: 11
 		}
 	}
 }
