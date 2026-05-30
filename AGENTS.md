@@ -10,12 +10,12 @@ MuseScore
 └── VST3 (target/release/*.vst3)          Cached WAV playback, transport-synced
         │
         ▼
-  Gen Backend (separate process)
-  ├── cephome engine (../cephome/engine/)  MusicXML→phoneme pipeline
-  └── your model (GPU 5-10s / CPU ~60s)   phonemes→WAV
+  loaphuong Backend (../loaphuong/)        (:3100)
+  ├── cephome submodule (cephome/engine/)  MusicXML→phoneme pipeline
+  └── NEUTRINO N.Engine                    phonemes→WAV
 ```
 
-**cephome** (`../cephome/`) is the phoneme engine — this repo is the instrument shell around it.
+**loaphuong** (`../loaphuong/`) is the full backend — NEUTRINO wrapper embedding cephome.
 
 ## Repo Structure
 
@@ -23,7 +23,7 @@ MuseScore
 loaphuong-mscore/
 ├── plugin/              MuseScore QML plugin
 ├── vst3/                Rust VST3 (nih-plug) cached playback
-├── backend/             Gen backend server (triggers cephome + your model)
+├── backend/             Launcher for ../loaphuong backend
 ├── AGENTS.md            This file
 └── ...
 ```
@@ -56,11 +56,14 @@ The gen model reads this, fills `audio` field:
 ## Key Commands (TBD — fill as you build)
 
 ```bash
-# Start gen backend
-bun run backend/index.ts
+# Start gen backend (dev)
+NEUTRINO_ROOT=/path/to/NEUTRINO bun run ../loaphuong/src/main.ts
+
+# Start gen backend (compiled)
+NEUTRINO_ROOT=/path/to/NEUTRINO ../loaphuong/loaphuong-linux
 
 # Build VST3
-cd vst3 && cargo xtask bundle loaphuong --release
+cd vst3 && cargo run --package xtask -- bundle loaphuong --release
 
 # Install QML plugin
 cp plugin/loaphuong.qml ~/Documents/MuseScore4/Plugins/loaphuong/
@@ -83,10 +86,11 @@ Trivial — just a cached WAV player:
 
 ## Gen Backend
 
-- HTTP server (Bun or Rust)
-- POST `/api/render` — accepts MusicXML, returns render.json
-- Optionally POST `/api/render-stream` — SSE progress events
-- Triggers cephome pipeline, calls your model, writes WAV
+Managed by `../loaphuong/` — NEUTRINO wrapper embedding cephome.
+- POST `/api/render` — MusicXML → WAV pipeline
+- POST `/api/render-stream` — SSE progress events
+- GET `/api/status` — Health check
+- GET `/api/voices` — List voice models
 
 ## Style
 
