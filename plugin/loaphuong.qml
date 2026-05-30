@@ -19,6 +19,7 @@ MuseScore {
 	property string resultPath: ""
 	property string lastXml: ""
 	property string lastError: ""
+	property string diag: ""
 
 	property int lyricNoteCount: 0
 
@@ -79,6 +80,7 @@ MuseScore {
 		cursor.rewind(Cursor.SCORE_START)
 		var written = 0
 		var safety = 0
+		var d = "writePhonemes: target=" + target + " notes.len=" + notes.length + "\n"
 		curScore.startCmd()
 		while (cursor.segment && ++safety < 500) {
 			var e = cursor.element
@@ -89,23 +91,31 @@ MuseScore {
 					var phones = exportData[nid]
 					if (phones && phones.length > 0) {
 						var txt = phones.join(" ")
+						if (safety <= 5)
+							d += "  tick=" + cursor.tick + " nid=" + nid + " phones=" + txt + "\n"
 						try {
 							if (e.lyrics && e.lyrics.length > 1 && e.lyrics[1]) {
 								e.lyrics[1].text = txt
-							} else {
+								written++
+							} else if (e.lyrics && e.lyrics.length === 1) {
+								// Add Lyric Line 2 via cursor
 								var ly = newElement(Element.LYRICS)
-								ly.text = txt
-								ly.verse = 1
-								cursor.add(ly)
+								if (ly) {
+									ly.text = txt
+									ly.verse = 1
+									cursor.add(ly)
+									written++
+								}
 							}
-							written++
-						} catch (_) {}
+						} catch (_) { d += "  EXCEPTION at tick=" + cursor.tick + "\n" }
 					}
 				}
 			}
 			cursor.next()
 		}
 		curScore.endCmd()
+		d += "written=" + written + "/" + notes.length + " chords=" + safety
+		diag = d
 		lyricNoteCount = written
 	}
 
@@ -390,9 +400,9 @@ MuseScore {
 		Label {
 			text: lyricNoteCount > 0
 				? lyricNoteCount + " notes have Lyric 2 phonemes — edit them in the score, then Re-render"
-				: ""
-			visible: lyricNoteCount > 0
-			color: "#a78bfa"
+				: diag.length > 0 ? "No phonemes written — see debug" : ""
+			visible: lyricNoteCount > 0 || diag.length > 0
+			color: lyricNoteCount > 0 ? "#a78bfa" : "#ef4444"
 			font.pixelSize: 10
 			wrapMode: Text.Wrap
 		}
@@ -401,8 +411,8 @@ MuseScore {
 
 		Rectangle {
 			Layout.fillWidth: true
-			Layout.maximumHeight: 80
-			visible: lastError !== ""
+			Layout.maximumHeight: 140
+			visible: lastError !== "" || diag !== ""
 			color: "#1e1e2e"
 			radius: 4
 			clip: true
@@ -411,7 +421,7 @@ MuseScore {
 				anchors.fill: parent
 				anchors.margins: 4
 				Label {
-					text: "Error:\n" + lastError
+					text: lastError !== "" ? "Error:\n" + lastError : "Diag:\n" + diag
 					color: "#cdd6f4"
 					font.pixelSize: 9
 					font.family: "monospace"
