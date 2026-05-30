@@ -9,7 +9,7 @@ MuseScore {
 	height: 520
 
 	property string backendUrl: "http://127.0.0.1:3100"
-	property string voice: "merrow"
+	property string voice: "MERROW"
 	property string model: "gpu"
 
 	property bool rendering: false
@@ -224,7 +224,7 @@ MuseScore {
 				Label { text: "Model" }
 				ComboBox {
 					Layout.fillWidth: true
-					model: ["merrow", "nakumo", "reina", "runo", "soma", "zunko"]
+					model: ["MERROW", "NAKUMO", "REINA", "RUNO", "SOMA", "ZUNKO"]
 					currentIndex: 0
 					onCurrentTextChanged: root.voice = currentText
 				}
