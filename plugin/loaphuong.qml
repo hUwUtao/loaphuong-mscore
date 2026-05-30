@@ -65,7 +65,8 @@ MuseScore {
 	}
 
 
-	// Write phonemes as Lyric Line 2 — only on root notes (single/begin), skip melisma tails
+	// Write phonemes as Lyric Line 2 — only on root notes (single/begin), skip melisma tails.
+	// Only advance ki on root notes to match backend's single/begin-only phonemeExport.
 	function writePhonemesToScore(exportData) {
 		var target = findVocalTrack()
 		var keys = Object.keys(exportData)
@@ -75,31 +76,34 @@ MuseScore {
 		cursor.rewind(Cursor.SCORE_START)
 		var ki = 0, written = 0, safety = 0
 		curScore.startCmd()
-		while (cursor.segment && ++safety < 500) {
+		while (cursor.segment && ++safety < 500 && ki < keys.length) {
 			var e = cursor.element
-			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0
-				&& e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text && ki < keys.length) {
-				var phones = exportData[keys[ki]]
-				ki++
-				if (!phones || phones.length === 0) continue
-				// Only write for root notes (single=0, begin=1), skip melisma tails
-				var syl = e.lyrics[0].syllabic
-				if (syl !== 0 && syl !== 1) continue
-				// Skip if Lyric 2 already has user override text
-				if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text && e.lyrics[1].text.length > 0)
-					continue
-				var txt = phones.join(" ")
-				try {
-					if (e.lyrics.length > 1 && e.lyrics[1]) {
-						e.lyrics[1].text = txt
-					} else {
-						var ly = newElement(Element.LYRICS)
-						ly.text = txt
-						ly.verse = 1
-						cursor.add(ly)
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+					var syl = e.lyrics[0].syllabic
+					// Only consume ki for root notes (single=0, begin=1)
+					if (syl === 0 || syl === 1) {
+						var phones = exportData[keys[ki]]
+						ki++
+						if (!phones || phones.length === 0) { cursor.next(); continue }
+						// Skip if Lyric 2 already has user override text
+						if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text && e.lyrics[1].text.length > 0) {
+							cursor.next(); continue
+						}
+						var txt = typeof phones === "string" ? phones : phones.join(" ")
+						try {
+							if (e.lyrics.length > 1 && e.lyrics[1]) {
+								e.lyrics[1].text = txt
+							} else {
+								var ly = newElement(Element.LYRICS)
+								ly.text = txt
+								ly.verse = 1
+								cursor.add(ly)
+							}
+							written++
+						} catch (_) {}
 					}
-					written++
-				} catch (_) {}
+				}
 			}
 			cursor.next()
 		}
