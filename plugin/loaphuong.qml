@@ -17,6 +17,8 @@ MuseScore {
 	property real progress: 0.0
 	property string phase: "Ready"
 	property string resultPath: ""
+	property string lastXml: ""
+	property string lastError: ""
 
 	menuPath: "Plugins.loaphuong.Render Vocal"
 	description: "Render vocal track via Loaphuong gen backend"
@@ -120,9 +122,6 @@ MuseScore {
 
 		xml += '</part>\n'
 		xml += '</score-partwise>\n'
-
-		xml += '  </part>\n'
-		xml += '</score-partwise>\n'
 		return xml
 	}
 
@@ -141,6 +140,8 @@ MuseScore {
 
 		try {
 			var musicXml = generateMusicXml()
+			lastXml = musicXml.length > 2000 ? musicXml.slice(0, 2000) + "..." : musicXml
+			lastError = ""
 			phase = "Sending request..."
 
 			var xhr = new XMLHttpRequest()
@@ -159,6 +160,7 @@ MuseScore {
 							hasRender = true
 							phase = "Done!"
 						} else {
+							lastError = xhr.responseText
 							phase = "Error: " + xhr.status
 						}
 						rendering = false
@@ -260,6 +262,32 @@ MuseScore {
 		}
 
 		Item { Layout.fillHeight: true }
+
+		// Debug panel — show on error or after render
+		Rectangle {
+			Layout.fillWidth: true
+			Layout.maximumHeight: 150
+			visible: lastError !== "" || lastXml !== ""
+			color: "#1e1e2e"
+			radius: 4
+			clip: true
+
+			ScrollView {
+				anchors.fill: parent
+				anchors.margins: 4
+
+				Label {
+					text: lastError !== ""
+						? "Server:\n" + lastError
+						: "MusicXML:\n" + lastXml
+					color: "#cdd6f4"
+					font.pixelSize: 9
+					font.family: "monospace"
+					textFormat: Text.PlainText
+					wrapMode: Text.Wrap
+				}
+			}
+		}
 
 		Label {
 			text: curScore ? (curScore.title || "Untitled") + " \u00B7 " + curScore.nmeasures + " measures" : "No score open"
