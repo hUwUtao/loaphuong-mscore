@@ -146,7 +146,8 @@ MuseScore {
 
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
-		var tempo = curScore.tempo || 120
+		var rawT = curScore.tempo
+		var tempo = (typeof rawT === "number" && rawT > 0) ? rawT : 120
 		var div = curScore.division || 480
 		var measureLen = div * sigN * 4 / sigD
 		var allNotes = []
