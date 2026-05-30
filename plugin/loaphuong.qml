@@ -5,8 +5,8 @@ import QtQuick.Layouts 1.15
 
 MuseScore {
 	id: root
-	width: 500
-	height: 600
+	width: 440
+	height: 520
 
 	property string backendUrl: "http://127.0.0.1:3100"
 	property string voice: "MERROW"
@@ -20,72 +20,13 @@ MuseScore {
 	property string lastXml: ""
 	property string lastError: ""
 
-	// Phoneme override state
-	property var phonemeExport: ({})
-	property var pinnedOverrides: ({})
-	property var notes: []       // output.notes from last response
-	property var notePairs: []   // [{id, lyric, phonemes:"s i n", pinned:bool}]
+	property int lyricNoteCount: 0
 
 	menuPath: "Plugins.loaphuong.Render Vocal"
 	description: "Render vocal track via Loaphuong gen backend"
 	version: "0.1.0"
 	pluginType: "dialog"
 	dockArea: "none"
-
-	function rebuildNotePairs() {
-		var pairs = []
-		var keys = Object.keys(phonemeExport)
-		for (var i = 0; i < keys.length; i++) {
-			var id = keys[i]
-			var lyric = ""
-			for (var j = 0; j < notes.length; j++) {
-				if (notes[j].id === id) { lyric = notes[j].lyric || ""; break }
-			}
-			pairs.push({
-				id: id,
-				lyric: lyric,
-				phonemes: phonemeExport[id].join(" "),
-				pinned: !!pinnedOverrides[id]
-			})
-		}
-		notePairs = pairs
-	}
-
-	function togglePin(noteId) {
-		if (pinnedOverrides[noteId]) {
-			var copy = {}
-			var keys = Object.keys(pinnedOverrides)
-			for (var i = 0; i < keys.length; i++)
-				if (keys[i] !== noteId) copy[keys[i]] = pinnedOverrides[keys[i]]
-			pinnedOverrides = copy
-		} else {
-			var copy = {}
-			var keys = Object.keys(pinnedOverrides)
-			for (var i = 0; i < keys.length; i++)
-				copy[keys[i]] = pinnedOverrides[keys[i]]
-			copy[noteId] = phonemeExport[noteId]
-			pinnedOverrides = copy
-		}
-		rebuildNotePairs()
-	}
-
-	function pinAll() {
-		var copy = {}
-		var keys = Object.keys(phonemeExport)
-		for (var i = 0; i < keys.length; i++)
-			copy[keys[i]] = phonemeExport[keys[i]]
-		pinnedOverrides = copy
-		rebuildNotePairs()
-	}
-
-	function unpinAll() {
-		pinnedOverrides = ({})
-		rebuildNotePairs()
-	}
-
-	function hasPins() {
-		return Object.keys(pinnedOverrides).length > 0
-	}
 
 	onRun: {
 		try {
@@ -126,6 +67,69 @@ MuseScore {
 			}
 		}
 		return 0
+	}
+
+	// Write phonemes as Lyric Line 2 in the score
+	function writePhonemesToScore(exportData) {
+		var target = findVocalTrack()
+		var keys = Object.keys(exportData)
+		var cursor = curScore.newCursor()
+		cursor.track = target
+		cursor.rewind(Cursor.SCORE_START)
+		var vi = 0
+		var safety = 0
+		curScore.startCmd()
+		while (cursor.segment && ++safety < 500) {
+			var e = cursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				if (vi < keys.length) {
+					var phones = exportData[keys[vi]]
+					if (phones && phones.length > 0) {
+						var txt = phones.join(" ")
+						try {
+							if (e.lyrics && e.lyrics.length > 1 && e.lyrics[1]) {
+								e.lyrics[1].text = txt
+							} else {
+								var ly = newElement(Element.LYRICS)
+								ly.text = txt
+								ly.verse = 1
+								cursor.add(ly)
+							}
+						} catch (_) {}
+					}
+				}
+				vi++
+			}
+			cursor.next()
+		}
+		curScore.endCmd()
+		lyricNoteCount = vi
+	}
+
+	// Read Lyric Line 2 as override array (by note position)
+	function readPhonemesFromScore() {
+		var target = findVocalTrack()
+		var overrides = []
+		var cursor = curScore.newCursor()
+		cursor.track = target
+		cursor.rewind(Cursor.SCORE_START)
+		var safety = 0
+		while (cursor.segment && ++safety < 500) {
+			var e = cursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				var txt = ""
+				try {
+					if (e.lyrics && e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text)
+						txt = e.lyrics[1].text
+				} catch (_) {}
+				if (txt.length > 0)
+					overrides.push(txt.split(" "))
+				else
+					overrides.push([])
+			}
+			cursor.next()
+		}
+		return overrides
 	}
 
 	function generateMusicXml() {
@@ -244,22 +248,18 @@ MuseScore {
 		var xhr = new XMLHttpRequest()
 		xhr.open("POST", backendUrl + endpoint)
 		xhr.setRequestHeader("Content-Type", "application/json")
-
 		xhr.onreadystatechange = function() {
 			try {
 				if (xhr.readyState === 4) {
 					if (xhr.status === 200) cb(null, JSON.parse(xhr.responseText))
 					else cb(xhr.responseText, null)
 				}
-			} catch (e) {
-				cb(String(e), null)
-			}
+			} catch (e) { cb(String(e), null) }
 		}
-
 		xhr.send(JSON.stringify(bodyObj))
 	}
 
-	function analyzePhonemes(withOverrides) {
+	function analyzePhonemes() {
 		if (rendering || !curScore) return
 		rendering = true
 		progress = 0.0
@@ -269,19 +269,14 @@ MuseScore {
 		try {
 			var result = generateMusicXml()
 			var bodyObj = { musicxml: result.xml || undefined, scorePath: result.path || undefined }
-			if (withOverrides && hasPins()) bodyObj.phonemeOverrides = pinnedOverrides
-
 			doRequest("/api/phonemes", bodyObj, function(err, res) {
 				if (err) {
 					lastError = err
 					phase = "Error"
 				} else {
-					notes = res.notes || []
-					phonemeExport = res.phonemeExport || {}
-					if (!withOverrides) pinnedOverrides = ({})
-					rebuildNotePairs()
-					var pc = Object.keys(phonemeExport).length
-					phase = pc + " notes analyzed"
+					var exportData = res.phonemeExport || {}
+					writePhonemesToScore(exportData)
+					phase = Object.keys(exportData).length + " notes written as Lyric 2"
 				}
 				rendering = false
 				progress = 1.0
@@ -294,7 +289,6 @@ MuseScore {
 
 	function startRender(withOverrides) {
 		if (rendering || !curScore) return
-
 		rendering = true
 		hasRender = false
 		progress = 0.0
@@ -302,10 +296,13 @@ MuseScore {
 		resultPath = ""
 
 		try {
-			var result = generateMusicXml()
 			var bodyObj = { voice: voice, model: model }
-			if (withOverrides && hasPins())
-				bodyObj.phonemeOverrides = pinnedOverrides
+
+			// Read Lyric Line 2 as overrides when re-rendering
+			if (withOverrides)
+				bodyObj.phonemeOverrides = readPhonemesFromScore()
+
+			var result = generateMusicXml()
 			if (result.path) bodyObj.scorePath = result.path
 			else bodyObj.musicxml = result.xml
 
@@ -320,13 +317,10 @@ MuseScore {
 				} else {
 					resultPath = res.wavPath || ""
 					hasRender = true
-					if (res.output) {
-						notes = res.output.notes || []
-						phonemeExport = res.output.phonemeExport || {}
-						if (!withOverrides) pinnedOverrides = ({})
-						rebuildNotePairs()
-					}
-					phase = "Done! " + Object.keys(phonemeExport).length + " notes"
+					// Re-write phonemes from fresh export
+					if (res.output && res.output.phonemeExport)
+						writePhonemesToScore(res.output.phonemeExport)
+					phase = "Done! " + (res.output ? Object.keys(res.output.phonemeExport || {}).length + " notes" : "")
 				}
 				rendering = false
 				progress = 1.0
@@ -385,7 +379,7 @@ MuseScore {
 			Button {
 				text: "Analyze"
 				enabled: !rendering && curScore != null
-				onClicked: analyzePhonemes(false)
+				onClicked: analyzePhonemes()
 			}
 
 			Button {
@@ -397,8 +391,8 @@ MuseScore {
 
 			Button {
 				text: "Re-render"
-				enabled: !rendering && hasPins()
-				highlighted: hasPins()
+				enabled: !rendering && hasRender
+				highlighted: lyricNoteCount > 0
 				onClicked: startRender(true)
 			}
 
@@ -407,25 +401,6 @@ MuseScore {
 				enabled: hasRender && resultPath !== ""
 				onClicked: { if (resultPath) Qt.openUrlExternally("file://" + resultPath) }
 			}
-		}
-
-		RowLayout {
-			Layout.fillWidth: true
-			spacing: 6
-
-			Button {
-				text: "Pin all"
-				enabled: notePairs.length > 0 && !rendering
-				onClicked: pinAll()
-			}
-
-			Button {
-				text: "Unpin all"
-				enabled: hasPins() && !rendering
-				onClicked: unpinAll()
-			}
-
-			Item { Layout.fillWidth: true }
 		}
 
 		ProgressBar {
@@ -442,62 +417,18 @@ MuseScore {
 			font.pixelSize: 12
 		}
 
-		// Phoneme table
-		Frame {
-			Layout.fillWidth: true
-			Layout.fillHeight: true
-			visible: hasRender && notePairs.length > 0
-			clip: true
-			padding: 4
-
-			ListView {
-				id: phonemeList
-				anchors.fill: parent
-				model: notePairs
-				spacing: 2
-				clip: true
-
-				delegate: RowLayout {
-					width: phonemeList.width
-					spacing: 6
-					height: 22
-
-					Label {
-						text: modelData.id
-						color: "#64748b"
-						font.pixelSize: 10
-						font.family: "monospace"
-						Layout.preferredWidth: 70
-					}
-
-					Label {
-						text: modelData.lyric
-						font.pixelSize: 11
-						font.bold: true
-						Layout.preferredWidth: 50
-					}
-
-					Label {
-						text: modelData.phonemes
-						color: "#a78bfa"
-						font.pixelSize: 10
-						font.family: "monospace"
-						Layout.fillWidth: true
-						elide: Text.ElideRight
-					}
-
-					Button {
-						text: modelData.pinned ? "\u25C9" : "\u25CB"
-						flat: true
-						implicitWidth: 24
-						implicitHeight: 20
-						onClicked: togglePin(modelData.id)
-					}
-				}
-			}
+		Label {
+			text: lyricNoteCount > 0
+				? lyricNoteCount + " notes have Lyric 2 phonemes — edit them in the score, then Re-render"
+				: ""
+			visible: lyricNoteCount > 0
+			color: "#a78bfa"
+			font.pixelSize: 10
+			wrapMode: Text.Wrap
 		}
 
-		// Debug panel
+		Item { Layout.fillHeight: true }
+
 		Rectangle {
 			Layout.fillWidth: true
 			Layout.maximumHeight: 80
@@ -510,7 +441,7 @@ MuseScore {
 				anchors.fill: parent
 				anchors.margins: 4
 				Label {
-					text: "Server:\n" + lastError
+					text: "Error:\n" + lastError
 					color: "#cdd6f4"
 					font.pixelSize: 9
 					font.family: "monospace"
