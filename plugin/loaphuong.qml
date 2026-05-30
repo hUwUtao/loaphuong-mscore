@@ -187,6 +187,7 @@ MuseScore {
 		xml += '<part id="P1">\n'
 
 		var noteIdx = 0
+		var restTick = 0
 		for (var m = 1; m <= numMeasures; m++) {
 			xml += '<measure number="' + m + '">\n'
 			if (m === 1) {
@@ -197,17 +198,30 @@ MuseScore {
 				xml += '</attributes>\n'
 			}
 			var mEnd = m * measureLen
-			while (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
-				var an = allNotes[noteIdx++]
-				xml += '<note><pitch><step>' + pitchToStep(an.note.pitch) + '</step>'
-					+ '<octave>' + pitchToOctave(an.note.pitch) + '</octave></pitch>'
-					+ '<duration>' + an.dur + '</duration><type>quarter</type>'
-				if (an.lyric) {
-					var syl = ["single","begin","end","middle"][an.lyric.syllabic] || "single"
-					xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(an.lyric.text) + '</text></lyric>'
+			if (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
+				while (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
+					var an = allNotes[noteIdx++]
+					if (an.tick > restTick) {
+						var restDur = an.tick - restTick
+						xml += '<note><rest/><duration>' + restDur + '</duration><type>quarter</type></note>\n'
+					}
+					xml += '<note><pitch><step>' + pitchToStep(an.note.pitch) + '</step>'
+						+ '<octave>' + pitchToOctave(an.note.pitch) + '</octave></pitch>'
+						+ '<duration>' + an.dur + '</duration><type>quarter</type>'
+					if (an.lyric) {
+						var syl = ["single","begin","end","middle"][an.lyric.syllabic] || "single"
+						xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(an.lyric.text) + '</text></lyric>'
+					}
+					xml += '</note>\n'
+					restTick = an.tick + an.dur
 				}
-				xml += '</note>\n'
 			}
+			// Fill remaining time in measure with a rest
+			if (restTick < mEnd) {
+				var restDur = mEnd - restTick
+				xml += '<note><rest/><duration>' + restDur + '</duration><type>quarter</type></note>\n'
+			}
+			restTick = mEnd
 			xml += '</measure>\n'
 		}
 		xml += '</part>\n</score-partwise>\n'
