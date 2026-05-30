@@ -62,13 +62,22 @@ MuseScore {
 		xml += '<part id="P1">\n'
 
 		var cursor = curScore.newCursor()
-		cursor.rewind(0)
+		cursor.rewind(Cursor.SCORE_START)
 		var measureNum = 0
+		var measureTicks = div * sigN * (4 / sigD)
+		var lastMeasureTick = -1
 
 		while (cursor.segment) {
-			var el = cursor.element
-			if (el && el.type === Element.MEASURE) {
+			var tick = cursor.tick
+
+			// Detect measure boundary: tick crosses a measure line
+			if (lastMeasureTick < 0 || tick >= lastMeasureTick + measureTicks) {
+				// Close previous measure
+				if (lastMeasureTick >= 0)
+					xml += '</measure>\n'
+
 				measureNum++
+				lastMeasureTick = tick
 				xml += '<measure number="' + measureNum + '">\n'
 
 				if (measureNum === 1) {
@@ -84,6 +93,38 @@ MuseScore {
 					xml += '</clef>\n'
 					xml += '</attributes>\n'
 				}
+			}
+
+			var e = cursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				var note = e.notes[0]
+				var dur = e.duration ? e.duration.ticks : 1
+				xml += '<note>\n'
+				xml += '<pitch>\n'
+				xml += '<step>' + pitchToStep(note.pitch) + '</step>\n'
+				xml += '<octave>' + pitchToOctave(note.pitch) + '</octave>\n'
+				xml += '</pitch>\n'
+				xml += '<duration>' + dur + '</duration>\n'
+				xml += '<type>quarter</type>\n'
+				if (e.lyrics && e.lyrics.length > 0) {
+					var txt = e.lyrics[0].text || ""
+					if (txt.length > 0) {
+						var syl = ["single","begin","end","middle"][e.lyrics[0].syllabic] || "single"
+						xml += '<lyric>\n'
+						xml += '<syllabic>' + syl + '</syllabic>\n'
+						xml += '<text>' + escapeXml(txt) + '</text>\n'
+						xml += '</lyric>\n'
+					}
+				}
+				xml += '</note>\n'
+			}
+
+			cursor.next()
+		}
+
+		// Close last measure
+		if (lastMeasureTick >= 0)
+			xml += '</measure>\n'
 
 				cursor.next()
 
