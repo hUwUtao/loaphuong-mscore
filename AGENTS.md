@@ -10,12 +10,12 @@ MuseScore
 └── VST3 (target/release/*.vst3)          Cached WAV playback, transport-synced
         │
         ▼
-  Gen Backend (separate process)
-  ├── cephome engine (../cephome/engine/)  MusicXML→phoneme pipeline
-  └── your model (GPU 5-10s / CPU ~60s)   phonemes→WAV
+  loaphuong Backend (../loaphuong/)        (:3100)
+  ├── cephome submodule (cephome/engine/)  MusicXML→phoneme pipeline
+  └── NEUTRINO N.Engine                    phonemes→WAV
 ```
 
-**cephome** (`../cephome/`) is the phoneme engine — this repo is the instrument shell around it.
+**loaphuong** (`../loaphuong/`) is the full backend — NEUTRINO wrapper embedding cephome.
 
 ## Repo Structure
 
@@ -23,7 +23,7 @@ MuseScore
 loaphuong-mscore/
 ├── plugin/              MuseScore QML plugin
 ├── vst3/                Rust VST3 (nih-plug) cached playback
-├── backend/             Gen backend server (triggers cephome + your model)
+├── backend/             Launcher for ../loaphuong backend
 ├── AGENTS.md            This file
 └── ...
 ```
@@ -56,13 +56,36 @@ The gen model reads this, fills `audio` field:
 ## Key Commands (TBD — fill as you build)
 
 ```bash
-# Start gen backend
-bun run backend/index.ts
+# Start gen backend (dev)
+NEUTRINO_ROOT=/path/to/NEUTRINO bun run ../loaphuong/src/main.ts
 
-# Build VST3
-cd vst3 && cargo xtask bundle loaphuong --release
+# Start gen backend (compiled)
+NEUTRINO_ROOT=/path/to/NEUTRINO ../loaphuong/loaphuong-linux
 
-# Install QML plugin
+# Build VST3 (Linux)
+cd vst3 && cargo run --package xtask -- bundle loaphuong --release
+
+# Cross-build VST3 for Windows
+cd vst3 && cargo build --package loaphuong --target x86_64-pc-windows-gnu --release --lib
+mkdir -p target/bundled/loaphuong.vst3/Contents/x86_64-windows
+cp target/x86_64-pc-windows-gnu/release/loaphuong.dll target/bundled/loaphuong.vst3/Contents/x86_64-windows/
+
+# Build backend exe for Windows
+cd ../loaphuong && bun build --compile --target=bun-windows-x64 src/main.ts --outfile=loaphuong
+
+# Package Windows dist
+mkdir -p /tmp/loaphuong-win-dist/loaphuong.vst3/Contents/x86_64-windows
+cp loaphuong.exe /tmp/loaphuong-win-dist/
+cp vst3/target/x86_64-pc-windows-gnu/release/loaphuong.dll /tmp/loaphuong-win-dist/loaphuong.vst3/Contents/x86_64-windows/
+cp plugin/loaphuong.qml /tmp/loaphuong-win-dist/
+
+# Deploy VST3 on Windows (single-file format — rename .dll to .vst3)
+copy /y loaphuong.dll "C:\Program Files\Common Files\VST3\loaphuong.vst3"
+
+# Deploy QML plugin on Windows
+copy loaphuong.qml "%USERPROFILE%\Documents\MuseScore4\Plugins\loaphuong\"
+
+# Install QML plugin (Linux/macOS)
 cp plugin/loaphuong.qml ~/Documents/MuseScore4/Plugins/loaphuong/
 ```
 
@@ -83,10 +106,11 @@ Trivial — just a cached WAV player:
 
 ## Gen Backend
 
-- HTTP server (Bun or Rust)
-- POST `/api/render` — accepts MusicXML, returns render.json
-- Optionally POST `/api/render-stream` — SSE progress events
-- Triggers cephome pipeline, calls your model, writes WAV
+Managed by `../loaphuong/` — NEUTRINO wrapper embedding cephome.
+- POST `/api/render` — MusicXML → WAV pipeline
+- POST `/api/render-stream` — SSE progress events
+- GET `/api/status` — Health check
+- GET `/api/voices` — List voice models
 
 ## Style
 

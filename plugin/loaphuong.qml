@@ -2,404 +2,450 @@ import MuseScore 3.0
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Window 2.15
 
 MuseScore {
-    id: root
+	id: root
+	width: 440
+	height: 520
 
-    // ---- Configuration ----
-    property string backendUrl: "http://127.0.0.1:3100"
-    property string voice: "soprano"
-    property string model: "gpu"
-    property string cacheDir: ""
+	property string backendUrl: "http://127.0.0.1:3100"
+	property string voice: "MERROW"
+	property string model: "gpu"
 
-    // ---- State ----
-    property bool rendering: false
-    property bool hasRender: false
-    property real progress: 0.0
-    property string phase: ""
-    property string eta: ""
-    property string resultPath: ""
-    property var phrases: []
-    property var phraseProgress: ({})
+	property bool rendering: false
+	property bool hasRender: false
+	property real progress: 0.0
+	property string phase: "Ready"
+	property string resultPath: ""
+	property string lastXml: ""
+	property string lastError: ""
+	property int lyricNoteCount: 0
 
-    menuPath: "Plugins.loaphuong.Render Vocal"
-    description: "Render vocal track via Loaphuong gen backend"
-    version: "0.1.0"
-    pluginType: "dialog"
-    dockArea: "none"
+	menuPath: "Plugins.loaphuong.Render Vocal"
+	description: "Render vocal track via Loaphuong gen backend"
+	version: "0.1.0"
+	pluginType: "dialog"
+	dockArea: "none"
 
-    onRun: {
-        if (!curScore) {
-            console.log("loaphuong: no score open")
-            return
-        }
-        window.visible = true
-    }
+	onRun: {
+		try {
+			console.log("loaphuong: onRun, score=" + (curScore ? curScore.title : "none"))
+			phase = curScore ? "Ready — " + curScore.title : "No score open"
+		} catch (e) {
+			console.log("loaphuong: onRun error: " + e)
+			phase = "Init error: " + e
+		}
+	}
 
-    function collectScoreData() {
-        if (!curScore) return null
+	function pitchToStep(p) {
+		var steps = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+		return steps[p % 12]
+	}
 
-        var path = cacheDir + "/cephome_input.musicxml"
-        if (cacheDir === "") {
-            var ts = new Date().getTime()
-            path = Qt.formatDate(new Date(), "yyyyMMdd") + "_" + ts + ".musicxml"
-        }
+	function pitchToOctave(p) {
+		return Math.floor(p / 12) - 1
+	}
 
-        var ok = curScore.writeScore(path)
-        if (!ok) {
-            console.log("cephome: writeScore failed")
-            return null
-        }
+	function findVocalTrack() {
+		var nstaves = curScore.nstaves || 1
+		for (var t = 0; t < nstaves * 4; t++) {
+			var cursor = curScore.newCursor()
+			cursor.track = t
+			cursor.rewind(Cursor.SCORE_START)
+			var safety = 0
+			while (cursor.segment && ++safety < 500) {
+				var e = cursor.element
+				if (e && e.type === Element.CHORD && e.lyrics && e.lyrics.length > 0) {
+					return t
+				}
+				cursor.next()
+			}
+		}
+		return 0
+	}
 
-        var notes = []
-        var cursor = curScore.newCursor()
-        cursor.rewind(0)
-        cursor.voice = 0
 
-        while (cursor.next()) {
-            var el = cursor.element
-            if (el && el.type === Element.NOTE) {
-                var note = el
-                var lyricText = null
-                var verse = 0
-                var syllabic = null
+	// Write phonemes as Lyric Line 2 — only on root notes (single/begin), skip melisma tails.
+	// Only advance ki on root notes to match backend's single/begin-only phonemeExport.
+	function writePhonemesToScore(exportData) {
+		var target = findVocalTrack()
+		var keys = Object.keys(exportData)
+		if (keys.length === 0) return
+		var cursor = curScore.newCursor()
+		cursor.track = target
+		cursor.rewind(Cursor.SCORE_START)
+		var ki = 0, written = 0, safety = 0
+		curScore.startCmd()
+		while (cursor.segment && ++safety < 500 && ki < keys.length) {
+			var e = cursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+					var syl = e.lyrics[0].syllabic
+					// Only consume ki for root notes (single=0, begin=1)
+					if (syl === 0 || syl === 1) {
+						var phones = exportData[keys[ki]]
+						ki++
+						if (!phones || phones.length === 0) { cursor.next(); continue }
+						// Skip if Lyric 2 already has user override text
+						if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text && e.lyrics[1].text.length > 0) {
+							cursor.next(); continue
+						}
+						var txt = typeof phones === "string" ? phones : phones.join(" ")
+						try {
+							if (e.lyrics.length > 1 && e.lyrics[1]) {
+								e.lyrics[1].text = txt
+							} else {
+								var ly = newElement(Element.LYRICS)
+								ly.text = txt
+								ly.verse = 1
+								cursor.add(ly)
+							}
+							written++
+						} catch (_) {}
+					}
+				}
+			}
+			cursor.next()
+		}
+		curScore.endCmd()
+		lyricNoteCount = written
+	}
 
-                for (var i = 0; i < note.elements.length; i++) {
-                    var child = note.elements[i]
-                    if (child.type === Element.LYRICS) {
-                        lyricText = child.text
-                        verse = child.verse
-                        syllabic = child.syllabic
-                        break
-                    }
-                }
+	// Read Lyric Line 2 — only from root notes (single/begin), skip melisma tails
+	function readPhonemesFromScore() {
+		var target = findVocalTrack()
+		var overrides = []
+		var cursor = curScore.newCursor()
+		cursor.track = target
+		cursor.rewind(Cursor.SCORE_START)
+		var safety = 0
+		while (cursor.segment && ++safety < 500) {
+			var e = cursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				var txt = ""
+				if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+					var syl = e.lyrics[0].syllabic
+					if (syl === 0 || syl === 1) {
+						try {
+							if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text)
+								txt = e.lyrics[1].text
+						} catch (_) {}
+					}
+				}
+				overrides.push(txt.length > 0 ? txt.split(" ") : [])
+			}
+			cursor.next()
+		}
+		return overrides
+	}
 
-                if (lyricText) {
-                    notes.push({
-                        tick: note.tick,
-                        pitch: note.pitch,
-                        duration: note.duration,
-                        lyric: lyricText,
-                        verse: verse,
-                        syllabic: syllabic,
-                        voice: cursor.voice,
-                        staff: cursor.staffIdx
-                    })
-                }
-            }
-        }
+	function generateMusicXml() {
+		var nstaves = curScore.nstaves || 1
+		var target = findVocalTrack()
+		var info = "target track=" + target + " nstaves=" + nstaves + "\n"
 
-        return {
-            path: path,
-            notes: notes,
-            title: curScore.title,
-            composer: curScore.composer
-        }
-    }
+		var sigN = curScore.timesigNumerator || 4
+		var sigD = curScore.timesigDenominator || 4
+		var rawT = curScore.tempo
+		var tempo = (typeof rawT === "number" && rawT > 0) ? rawT : 120
+		var div = curScore.division || 480
+		var measureLen = div * sigN * 4 / sigD
+		var allNotes = []
 
-    function startRender() {
-        if (rendering) return
+		var fallbackCursor = curScore.newCursor()
+		fallbackCursor.track = target
+		fallbackCursor.rewind(Cursor.SCORE_START)
+		var segs = 0
+		while (fallbackCursor.segment && ++segs < 500) {
+			var e = fallbackCursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				var lrc = e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text ? e.lyrics[0] : null
+				allNotes.push({
+					tick: fallbackCursor.tick,
+					note: e.notes[0],
+					dur: e.duration ? e.duration.ticks : 1,
+					lyric: lrc
+				})
+			}
+			fallbackCursor.next()
+		}
+		allNotes.sort(function(a, b) { return a.tick - b.tick })
 
-        var data = collectScoreData()
-        if (!data) return
+		var totalTicks = 0
+		var ec = curScore.newCursor()
+		ec.rewind(Cursor.SCORE_END)
+		if (ec.segment) totalTicks = ec.tick
+		if (totalTicks <= 0 && allNotes.length > 0)
+			totalTicks = allNotes[allNotes.length - 1].tick + measureLen
+		if (totalTicks <= 0) totalTicks = measureLen * 10
 
-        rendering = true
-        hasRender = false
-        progress = 0.0
-        phase = "Exporting score..."
-        resultPath = ""
+		var numMeasures = Math.ceil(totalTicks / measureLen)
 
-        var xhr = new XMLHttpRequest()
-        xhr.open("POST", backendUrl + "/api/render")
-        xhr.setRequestHeader("Content-Type", "application/json")
+		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN"'
+			+ ' "http://www.musicxml.org/dtds/partwise.dtd">\n'
+		xml += '<score-partwise version="4.0">\n'
+		xml += '<part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>\n'
+		xml += '<part id="P1">\n'
 
-        xhr.onprogress = function(e) {
-            if (xhr.status !== 200) return
-            var text = xhr.responseText || ""
-            var lines = text.trim().split("\n")
-            for (var i = 0; i < lines.length; i++) {
-                try {
-                    var ev = JSON.parse(lines[i])
-                    updateProgress(ev)
-                } catch(_) {}
-            }
-        }
+		var noteIdx = 0
+		var restTick = 0
+		for (var m = 1; m <= numMeasures; m++) {
+			xml += '<measure number="' + m + '">\n'
+			if (m === 1) {
+				xml += '<attributes>\n'
+				xml += '<divisions>' + div + '</divisions>\n'
+				xml += '<time><beats>' + sigN + '</beats><beat-type>' + sigD + '</beat-type></time>\n'
+				xml += '<clef><sign>G</sign><line>2</line></clef>\n'
+				xml += '</attributes>\n'
+				xml += '<direction placement="above"><direction-type><words>♩ = ' + tempo + '</words></direction-type><sound tempo="' + tempo + '"/></direction>\n'
+			}
+			var mEnd = m * measureLen
+			if (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
+				while (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
+					var an = allNotes[noteIdx++]
+					if (an.tick > restTick) {
+						var restDur = an.tick - restTick
+						xml += '<note><rest/><duration>' + restDur + '</duration><type>quarter</type></note>\n'
+					}
+					xml += '<note><pitch><step>' + pitchToStep(an.note.pitch) + '</step>'
+						+ '<octave>' + pitchToOctave(an.note.pitch) + '</octave></pitch>'
+						+ '<duration>' + an.dur + '</duration><type>quarter</type>'
+					if (an.lyric) {
+						var syl = ["single","begin","end","middle"][an.lyric.syllabic] || "single"
+						xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(an.lyric.text) + '</text></lyric>'
+					}
+					xml += '</note>\n'
+					restTick = an.tick + an.dur
+				}
+			}
+			// Fill remaining time in measure with a rest
+			if (restTick < mEnd) {
+				var restDur = mEnd - restTick
+				xml += '<note><rest/><duration>' + restDur + '</duration><type>quarter</type></note>\n'
+			}
+			restTick = mEnd
+			xml += '</measure>\n'
+		}
+		xml += '</part>\n</score-partwise>\n'
 
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState === XMLHttpRequest.LOADING) {
-                var text = xhr.responseText || ""
-                var lines = text.trim().split("\n")
-                for (var i = 0; i < lines.length; i++) {
-                    try {
-                        var ev = JSON.parse(lines[i])
-                        updateProgress(ev)
-                    } catch(_) {}
-                }
-            }
-            if (xhr.readyState === XMLHttpRequest.DONE) {
-                if (xhr.status === 200) {
-                    try {
-                        var result = JSON.parse(xhr.responseText)
-                        resultPath = result.wavPath || result.audioPath || ""
-                        hasRender = true
-                        phase = "Done!"
-                    } catch(e) {
-                        phase = "Error parsing response"
-                    }
-                } else {
-                    phase = "Error: " + xhr.status
-                }
-                rendering = false
-                progress = 1.0
-            }
-        }
+		info += "measures=" + numMeasures + " notes=" + allNotes.length
+		lastXml = info + "\n---\n" + xml.slice(0, 1500)
+		return xml
+	}
 
-        var body = JSON.stringify({
-            musicxml: data.path,
-            voice: voice,
-            model: model,
-            options: {
-                title: data.title,
-                composer: data.composer || "",
-                notes: data.notes.map(function(n) {
-                    return {
-                        tick: n.tick,
-                        midi: n.pitch,
-                        lyric: n.lyric,
-                        verse: n.verse,
-                        syllabic: n.syllabic
-                    }
-                })
-            }
-        })
+	function escapeXml(s) {
+		return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;")
+	}
 
-        xhr.send(body)
-    }
+	function doRequest(endpoint, bodyObj, cb) {
+		var xhr = new XMLHttpRequest()
+		xhr.open("POST", backendUrl + endpoint)
+		xhr.setRequestHeader("Content-Type", "application/json")
+		xhr.onreadystatechange = function() {
+			try {
+				if (xhr.readyState === 4) {
+					if (xhr.status === 200) cb(null, JSON.parse(xhr.responseText))
+					else cb(xhr.responseText, null)
+				}
+			} catch (e) { cb(String(e), null) }
+		}
+		xhr.send(JSON.stringify(bodyObj))
+	}
 
-    function updateProgress(ev) {
-        if (ev.phase) phase = ev.phase
-        if (ev.progress !== undefined) progress = ev.progress
-        if (ev.eta) eta = ev.eta
-        if (ev.phrase !== undefined && ev.status !== undefined) {
-            phraseProgress[ev.phrase] = ev.status
-            var list = []
-            for (var k in phraseProgress) list.push(k)
-            phraseProgress = phraseProgress
-        }
-    }
 
-    function progressColor(status) {
-        if (status === "done") return "#22c55e"
-        if (status === "rendering") return "#3b82f6"
-        if (status === "queued") return "#94a3b8"
-        return "#e2e8f0"
-    }
+	function startRender(withOverrides) {
+		if (rendering || !curScore) return
+		rendering = true
+		hasRender = false
+		progress = 0.0
+		phase = "Generating MusicXML..."
+		resultPath = ""
 
-    function progressIcon(status) {
-        if (status === "done") return "\u2713"
-        if (status === "rendering") return "\u25B6"
-        if (status === "queued") return "\u25CB"
-        return "\u00B7"
-    }
+		try {
+			var bodyObj = { voice: voice, model: model }
 
-    Window {
-        id: window
-        width: 420
-        height: 520
-        title: "Loaphuong Render"
-        flags: Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowTitleHint
-        modality: Qt.NonModal
+			// Read Lyric Line 2 as overrides when re-rendering
+			if (withOverrides)
+				bodyObj.phonemeOverrides = readPhonemesFromScore()
 
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 12
+			var musicXml = generateMusicXml()
+			bodyObj.musicxml = musicXml
 
-            // ---- Config section ----
-            GroupBox {
-                title: "Configuration"
-                Layout.fillWidth: true
+			lastXml = musicXml.length > 2000 ? musicXml.slice(0, 2000) + "..." : musicXml
+			lastError = ""
+			phase = "Rendering..."
 
-                GridLayout {
-                    columns: 2
-                    columnSpacing: 8
-                    rowSpacing: 8
-                    anchors.left: parent.left
-                    anchors.right: parent.right
+			doRequest("/api/render", bodyObj, function(err, res) {
+				if (err) {
+					lastError = err
+					phase = "Error"
+				} else {
+					resultPath = res.wavPath || ""
+					hasRender = true
+					phase = "Done! " + ((res.output && res.output.phonemeExport) ? Object.keys(res.output.phonemeExport).length + " notes" : "")
+				}
+				rendering = false
+				progress = 1.0
+			})
+		} catch (e) {
+			phase = "Error: " + e
+			rendering = false
+		}
+	}
 
-                    Label { text: "Voice" }
-                    ComboBox {
-                        id: voiceCombo
-                        Layout.fillWidth: true
-                        model: ["soprano", "alto", "tenor", "baritone"]
-                        currentIndex: 0
-                        onCurrentTextChanged: root.voice = currentText
-                    }
+	function showPhonemes() {
+		if (rendering || !curScore) return
+		rendering = true
+		progress = 0.0
+		phase = "Analyzing..."
+		lastError = ""
 
-                    Label { text: "Model" }
-                    ComboBox {
-                        id: modelCombo
-                        Layout.fillWidth: true
-                        model: ["gpu (fast)", "cpu (slow)"]
-                        currentIndex: 0
-                        onCurrentTextChanged: {
-                            root.model = currentText.indexOf("gpu") >= 0 ? "gpu" : "cpu"
-                        }
-                    }
+		try {
+			var musicXml = generateMusicXml()
+			var bodyObj = { musicxml: musicXml }
+			doRequest("/api/phonemes", bodyObj, function(err, res) {
+				if (err) {
+					lastError = err
+					phase = "Error"
+				} else {
+					var pExport = res.phonemeExport || {}
+					writePhonemesToScore(pExport)
+					phase = Object.keys(pExport).length + " notes written to Lyric 2"
+				}
+				rendering = false
+				progress = 1.0
+			})
+		} catch (e) {
+			phase = "Error: " + e
+			rendering = false
+		}
+	}
 
-                    Label { text: "Backend URL" }
-                    TextField {
-                        id: urlField
-                        Layout.fillWidth: true
-                        text: root.backendUrl
-                        onTextChanged: root.backendUrl = text
-                    }
+	ColumnLayout {
+		anchors.fill: parent
+		anchors.margins: 12
+		spacing: 8
 
-                    Label { text: "Cache dir" }
-                    TextField {
-                        id: cacheField
-                        Layout.fillWidth: true
-                        placeholderText: "Auto (temp)"
-                        onTextChanged: root.cacheDir = text
-                    }
-                }
-            }
+		GroupBox {
+			title: "Voice"
+			Layout.fillWidth: true
 
-            // ---- Render button + status ----
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
+			GridLayout {
+				columns: 2
+				columnSpacing: 8
+				rowSpacing: 6
+				anchors.left: parent.left
+				anchors.right: parent.right
 
-                Button {
-                    id: renderBtn
-                    text: rendering ? "Rendering..." : "Render"
-                    Layout.fillWidth: true
-                    enabled: !rendering && curScore !== null
-                    onClicked: startRender()
-                }
+				Label { text: "Model" }
+				ComboBox {
+					Layout.fillWidth: true
+					model: ["MERROW", "NAKUMO", "REINA", "RUNO", "SOMA", "ZUNKO"]
+					currentIndex: 0
+					onCurrentTextChanged: root.voice = currentText
+				}
 
-                Button {
-                    text: "Cancel"
-                    enabled: rendering
-                    onClicked: {
-                        rendering = false
-                        phase = "Cancelled"
-                    }
-                }
-            }
+				Label { text: "Backend" }
+				TextField {
+					Layout.fillWidth: true
+					text: root.backendUrl
+					onTextChanged: root.backendUrl = text
+				}
 
-            // ---- Progress bar ----
-            ProgressBar {
-                id: progressBar
-                Layout.fillWidth: true
-                from: 0
-                to: 1
-                value: progress
-                visible: rendering || hasRender
-            }
+				Label { text: "Render" }
+				ComboBox {
+					Layout.fillWidth: true
+					model: ["gpu", "cpu"]
+					currentIndex: 0
+					onCurrentTextChanged: root.model = currentText
+				}
+			}
+		}
 
-            Label {
-                text: phase + (eta ? " (" + eta + ")" : "")
-                visible: phase !== ""
-                color: hasRender ? "#22c55e" : "#64748b"
-                font.pixelSize: 12
-            }
+		RowLayout {
+			Layout.fillWidth: true
+			spacing: 6
 
-            // ---- Phrase chips ----
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                visible: Object.keys(phraseProgress).length > 0
+			Button {
+				text: "Show Phonemes"
+				enabled: !rendering && curScore != null
+				onClicked: showPhonemes()
+			}
 
-                Flow {
-                    id: chipFlow
-                    width: parent.width
-                    spacing: 6
+			Button {
+				text: rendering ? "Rendering..." : "Render"
+				enabled: !rendering && curScore != null
+				Layout.fillWidth: true
+				onClicked: startRender(false)
+			}
 
-                    Repeater {
-                        model: {
-                            var keys = Object.keys(phraseProgress).sort()
-                            return keys
-                        }
+			Button {
+				text: "Re-render"
+				enabled: !rendering && hasRender
+				highlighted: lyricNoteCount > 0
+				onClicked: startRender(true)
+			}
 
-                        delegate: Rectangle {
-                            width: chipLabel.implicitWidth + 24
-                            height: 28
-                            radius: 14
-                            color: progressColor(phraseProgress[modelData])
+			Button {
+				text: "Play"
+				enabled: hasRender && resultPath !== ""
+				onClicked: { if (resultPath) Qt.openUrlExternally("file://" + resultPath) }
+			}
+		}
 
-                            Label {
-                                id: chipLabel
-                                anchors.centerIn: parent
-                                text: progressIcon(phraseProgress[modelData]) + " " + modelData
-                                color: "white"
-                                font.pixelSize: 11
-                                font.bold: true
-                            }
+		ProgressBar {
+			Layout.fillWidth: true
+			from: 0; to: 1
+			value: progress
+			visible: rendering || hasRender
+		}
 
-                            ToolTip {
-                                text: modelData + ": " + phraseProgress[modelData]
-                                visible: ma.containsMouse
-                            }
+		Label {
+			text: phase
+			visible: phase !== ""
+			color: hasRender ? "#22c55e" : "#64748b"
+			font.pixelSize: 12
+		}
 
-                            MouseArea {
-                                id: ma
-                                anchors.fill: parent
-                                hoverEnabled: true
-                            }
-                        }
-                    }
-                }
-            }
+		Label {
+			text: lyricNoteCount > 0
+				? lyricNoteCount + " notes have Lyric 2 phonemes — edit them in the score, then Re-render"
+				: ""
+			visible: lyricNoteCount > 0
+			color: "#a78bfa"
+			font.pixelSize: 10
+			wrapMode: Text.Wrap
+		}
 
-            // ---- Result path ----
-            Rectangle {
-                Layout.fillWidth: true
-                height: 36
-                radius: 6
-                color: "#f0fdf4"
-                border.color: "#bbf7d0"
-                visible: hasRender && resultPath !== ""
+		Item { Layout.fillHeight: true }
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 8
+		Rectangle {
+			Layout.fillWidth: true
+			Layout.maximumHeight: 80
+			visible: lastError !== ""
+			color: "#1e1e2e"
+			radius: 4
+			clip: true
 
-                    Label {
-                        text: "\uD83D\uDD0A WAV"
-                        font.bold: true
-                        color: "#166534"
-                    }
+			ScrollView {
+				anchors.fill: parent
+				anchors.margins: 4
+				Label {
+					text: "Error:\n" + lastError
+					color: "#cdd6f4"
+					font.pixelSize: 9
+					font.family: "monospace"
+					textFormat: Text.PlainText
+					wrapMode: Text.Wrap
+				}
+			}
+		}
 
-                    Label {
-                        text: resultPath
-                        Layout.fillWidth: true
-                        elide: Text.ElideMiddle
-                        color: "#166534"
-                        font.pixelSize: 11
-                    }
-
-                    Button {
-                        text: "Copy"
-                        flat: true
-                        onClicked: {
-                            // clipboard copy workaround
-                            phase = "Copied: " + resultPath
-                        }
-                    }
-                }
-            }
-
-            // ---- Score info ----
-            Label {
-                text: curScore ? (curScore.title || "Untitled") + " \u00B7 " + curScore.nmeasures + " measures" : "No score open"
-                color: "#94a3b8"
-                font.pixelSize: 11
-                visible: true
-            }
-        }
-    }
+		Label {
+			text: curScore ? (curScore.title || "Untitled") + " \u00B7 " + curScore.nmeasures + " measures" : "No score open"
+			color: "#94a3b8"
+			font.pixelSize: 10
+		}
+	}
 }
