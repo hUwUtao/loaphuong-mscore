@@ -49,64 +49,116 @@ MuseScore {
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
 		var div = curScore.division || 480
+		var measureLen = div * sigN * 4 / sigD
 
-		// DEBUG: just dump segment info
-		var info = "track0 scan:\n"
-		var cursor = curScore.newCursor()
-		cursor.rewind(Cursor.SCORE_START)
-		var segs = 0, chords = 0, lyrics = 0
-		while (cursor.segment && ++segs < 100) {
-			var e = cursor.element
-			if (e) {
-				info += "seg" + segs + " t=" + cursor.tick + " type=" + e.type
-				if (e.type === Element.CHORD) {
-					chords++
-					info += " notes=" + (e.notes ? e.notes.length : 0)
-					if (e.lyrics && e.lyrics.length > 0) {
-						lyrics += e.lyrics.length
-						info += " lyrics=" + e.lyrics.length + "[" + e.lyrics[0].text + "]"
-					}
+		// Scan all tracks to find chords
+		var info = "scanning all tracks:\n"
+		var nstaves = curScore.nstaves || 1
+		var allNotes = []
+
+		for (var t = 0; t < nstaves * 4; t++) {
+			var cursor = curScore.newCursor()
+			cursor.track = t
+			cursor.rewind(Cursor.SCORE_START)
+			var segs = 0, found = 0
+			while (cursor.segment && ++segs < 100) {
+				var e = cursor.element
+				if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+					found++
+					var lrc = null
+					if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text)
+						lrc = e.lyrics[0]
+					allNotes.push({
+						tick: cursor.tick, track: t,
+						note: e.notes[0],
+						dur: e.duration ? e.duration.ticks : 1,
+						lyric: lrc
+					})
+					if (segs <= 5)
+						info += "  track" + t + " seg" + segs + " t=" + cursor.tick
+							+ " pitch=" + e.notes[0].pitch
+							+ (lrc ? " lyric=" + lrc.text : "") + "\n"
 				}
-				info += "\n"
+				cursor.next()
 			}
-			cursor.next()
+			if (found > 0)
+				info += "track" + t + ": " + found + " chords\n"
 		}
-		info += "total: segs=" + segs + " chords=" + chords + " lyrics=" + lyrics
 
-		// Wrap in minimal MusicXML so backend can report parse error
+		// Sort all notes by tick
+		allNotes.sort(function(a, b) { return a.tick - b.tick })
+
+		// Determine total ticks
+		var totalTicks = 0
+		var ec = curScore.newCursor()
+		ec.rewind(Cursor.SCORE_END)
+		if (ec.segment)
+			totalTicks = ec.tick
+		if (totalTicks <= 0 && allNotes.length > 0)
+			totalTicks = allNotes[allNotes.length - 1].tick + measureLen
+		if (totalTicks <= 0)
+			totalTicks = measureLen * 10
+
+		var numMeasures = Math.ceil(totalTicks / measureLen)
+		info += "\nmeasures=" + numMeasures + " totalTicks=" + totalTicks
+			+ " measureLen=" + measureLen
+
+		// Generate MusicXML with proper measure boundaries
 		var xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+		xml += '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN"'
+			+ ' "http://www.musicxml.org/dtds/partwise.dtd">\n'
 		xml += '<score-partwise version="4.0">\n'
-		xml += '<part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>\n'
-		xml += '<part id="P1"><measure number="1">\n'
-		xml += '<attributes><divisions>' + div + '</divisions>'
-		xml += '<time><beats>' + sigN + '</beats><beat-type>' + sigD + '</beat-type></time>'
-		xml += '<clef><sign>G</sign><line>2</line></clef>'
-		xml += '</attributes>\n'
+		xml += '<part-list>\n'
+		xml += '<score-part id="P1"><part-name>Voice</part-name></score-part>\n'
+		xml += '</part-list>\n'
+		xml += '<part id="P1">\n'
 
-		// Emit notes from track0 chords
-		var cursor2 = curScore.newCursor()
-		cursor2.rewind(Cursor.SCORE_START)
-		var safety = 0
-		while (cursor2.segment && ++safety < 5000) {
-			var e = cursor2.element
-			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
-				var n = e.notes[0]
-				xml += '<note><pitch><step>' + pitchToStep(n.pitch) + '</step>'
-				xml += '<octave>' + pitchToOctave(n.pitch) + '</octave></pitch>'
-				xml += '<duration>' + (e.duration ? e.duration.ticks : 1) + '</duration>'
-				xml += '<type>quarter</type>'
-				if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
-					var syl = ["single","begin","end","middle"][e.lyrics[0].syllabic] || "single"
-					xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(e.lyrics[0].text) + '</text></lyric>'
+		var noteIdx = 0
+		for (var m = 1; m <= numMeasures; m++) {
+			xml += '<measure number="' + m + '">\n'
+			if (m === 1) {
+				xml += '<attributes>\n'
+				xml += '<divisions>' + div + '</divisions>\n'
+				xml += '<time>\n'
+				xml += '<beats>' + sigN + '</beats>\n'
+				xml += '<beat-type>' + sigD + '</beat-type>\n'
+				xml += '</time>\n'
+				xml += '<clef>\n'
+				xml += '<sign>G</sign>\n'
+				xml += '<line>2</line>\n'
+				xml += '</clef>\n'
+				xml += '</attributes>\n'
+			}
+
+			var mStart = (m - 1) * measureLen
+			var mEnd = m * measureLen
+			while (noteIdx < allNotes.length && allNotes[noteIdx].tick < mEnd) {
+				var an = allNotes[noteIdx]
+				xml += '<note>\n'
+				xml += '<pitch>\n'
+				xml += '<step>' + pitchToStep(an.note.pitch) + '</step>\n'
+				xml += '<octave>' + pitchToOctave(an.note.pitch) + '</octave>\n'
+				xml += '</pitch>\n'
+				xml += '<duration>' + an.dur + '</duration>\n'
+				xml += '<type>quarter</type>\n'
+				if (an.lyric) {
+					var syl = ["single","begin","end","middle"][an.lyric.syllabic] || "single"
+					xml += '<lyric>\n'
+					xml += '<syllabic>' + syl + '</syllabic>\n'
+					xml += '<text>' + escapeXml(an.lyric.text) + '</text>\n'
+					xml += '</lyric>\n'
 				}
 				xml += '</note>\n'
+				noteIdx++
 			}
-			cursor2.next()
+
+			xml += '</measure>\n'
 		}
 
-		xml += '</measure></part></score-partwise>\n'
+		xml += '</part>\n'
+		xml += '</score-partwise>\n'
 
-		lastXml = info + "\n\n---\n\nMusicXML:\n" + xml.slice(0, 1000)
+		lastXml = info + "\n\n---\n\nMusicXML:\n" + xml.slice(0, 1500)
 		return xml
 	}
 
