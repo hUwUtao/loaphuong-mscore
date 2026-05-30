@@ -19,7 +19,6 @@ MuseScore {
 	property string resultPath: ""
 	property string lastXml: ""
 	property string lastError: ""
-	property string diag: ""
 
 	property int lyricNoteCount: 0
 
@@ -66,10 +65,48 @@ MuseScore {
 		return 0
 	}
 
-	function findNoteIdxByTick(tick) {
-		for (var i = 0; i < notes.length; i++)
-			if (notes[i].tick === tick) return i
+	function findNoteIdxByTick(tick, list) {
+		for (var i = 0; i < list.length; i++)
+			if (list[i].tick === tick) return i
 		return -1
+	}
+
+	// Write phonemes as Lyric Line 2 — match by tick from noteList
+	function writePhonemesToScore(exportData, noteList) {
+		var target = findVocalTrack()
+		if (!noteList || noteList.length === 0) return
+		var cursor = curScore.newCursor()
+		cursor.track = target
+		cursor.rewind(Cursor.SCORE_START)
+		var written = 0, safety = 0
+		curScore.startCmd()
+		while (cursor.segment && ++safety < 500) {
+			var e = cursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0
+				&& e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+				var ni = findNoteIdxByTick(cursor.tick, noteList)
+				if (ni >= 0) {
+					var phones = exportData[noteList[ni].id]
+					if (phones && phones.length > 0) {
+						var txt = phones.join(" ")
+						try {
+							if (e.lyrics.length > 1 && e.lyrics[1]) {
+								e.lyrics[1].text = txt
+							} else {
+								var ly = newElement(Element.LYRICS)
+								ly.text = txt
+								ly.verse = 1
+								cursor.add(ly)
+							}
+							written++
+						} catch (_) {}
+					}
+				}
+			}
+			cursor.next()
+		}
+		curScore.endCmd()
+		lyricNoteCount = written
 	}
 
 	// Write phonemes as Lyric Line 2 — match by tick
@@ -239,34 +276,6 @@ MuseScore {
 		xhr.send(JSON.stringify(bodyObj))
 	}
 
-	function analyzePhonemes() {
-		if (rendering || !curScore) return
-		rendering = true
-		progress = 0.0
-		phase = "Analyzing phonemes..."
-		lastError = ""
-
-		try {
-			var musicXml = generateMusicXml()
-			var bodyObj = { musicxml: musicXml }
-			doRequest("/api/phonemes", bodyObj, function(err, res) {
-				if (err) {
-					lastError = err
-					phase = "Error"
-				} else {
-					notes = res.notes || []
-					phonemeExport = res.phonemeExport || {}
-					writePhonemesToScore(phonemeExport)
-					phase = Object.keys(phonemeExport).length + " notes written as Lyric 2"
-				}
-				rendering = false
-				progress = 1.0
-			})
-		} catch (e) {
-			phase = "Error: " + e
-			rendering = false
-		}
-	}
 
 	function startRender(withOverrides) {
 		if (rendering || !curScore) return
@@ -297,10 +306,10 @@ MuseScore {
 				} else {
 					resultPath = res.wavPath || ""
 					hasRender = true
-					notes = (res.output && res.output.notes) || []
-					phonemeExport = (res.output && res.output.phonemeExport) || {}
-					writePhonemesToScore(phonemeExport)
-					phase = "Done! " + Object.keys(phonemeExport).length + " notes"
+					var nlist = (res.output && res.output.notes) || []
+					var pExport = (res.output && res.output.phonemeExport) || {}
+					writePhonemesToScore(pExport, nlist)
+					phase = "Done! " + Object.keys(pExport).length + " notes"
 				}
 				rendering = false
 				progress = 1.0
@@ -357,13 +366,7 @@ MuseScore {
 			spacing: 6
 
 			Button {
-				text: "Analyze"
-				enabled: !rendering && curScore != null
-				onClicked: analyzePhonemes()
-			}
-
-			Button {
-				text: "Render"
+				text: rendering ? "Rendering..." : "Render"
 				enabled: !rendering && curScore != null
 				Layout.fillWidth: true
 				onClicked: startRender(false)
@@ -400,9 +403,9 @@ MuseScore {
 		Label {
 			text: lyricNoteCount > 0
 				? lyricNoteCount + " notes have Lyric 2 phonemes — edit them in the score, then Re-render"
-				: diag.length > 0 ? "No phonemes written — see debug" : ""
-			visible: lyricNoteCount > 0 || diag.length > 0
-			color: lyricNoteCount > 0 ? "#a78bfa" : "#ef4444"
+				: ""
+			visible: lyricNoteCount > 0
+			color: "#a78bfa"
 			font.pixelSize: 10
 			wrapMode: Text.Wrap
 		}
@@ -411,8 +414,8 @@ MuseScore {
 
 		Rectangle {
 			Layout.fillWidth: true
-			Layout.maximumHeight: 140
-			visible: lastError !== "" || diag !== ""
+			Layout.maximumHeight: 80
+			visible: lastError !== ""
 			color: "#1e1e2e"
 			radius: 4
 			clip: true
@@ -421,7 +424,7 @@ MuseScore {
 				anchors.fill: parent
 				anchors.margins: 4
 				Label {
-					text: lastError !== "" ? "Error:\n" + lastError : "Diag:\n" + diag
+					text: "Error:\n" + lastError
 					color: "#cdd6f4"
 					font.pixelSize: 9
 					font.family: "monospace"
