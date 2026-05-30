@@ -244,9 +244,10 @@ MuseScore {
 					lastError = err
 					phase = "Error"
 				} else {
-					var exportData = res.phonemeExport || {}
-					writePhonemesToScore(exportData)
-					phase = Object.keys(exportData).length + " notes written as Lyric 2"
+					notes = res.notes || []
+					phonemeExport = res.phonemeExport || {}
+					writePhonemesToScore(phonemeExport)
+					phase = Object.keys(phonemeExport).length + " notes written as Lyric 2"
 				}
 				rendering = false
 				progress = 1.0
@@ -286,10 +287,10 @@ MuseScore {
 				} else {
 					resultPath = res.wavPath || ""
 					hasRender = true
-					// Re-write phonemes from fresh export
-					if (res.output && res.output.phonemeExport)
-						writePhonemesToScore(res.output.phonemeExport)
-					phase = "Done! " + (res.output ? Object.keys(res.output.phonemeExport || {}).length + " notes" : "")
+					notes = (res.output && res.output.notes) || []
+					phonemeExport = (res.output && res.output.phonemeExport) || {}
+					writePhonemesToScore(phonemeExport)
+					phase = "Done! " + Object.keys(phonemeExport).length + " notes"
 				}
 				rendering = false
 				progress = 1.0
