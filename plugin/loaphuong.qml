@@ -63,6 +63,9 @@ MuseScore {
 		cursor.rewind(0)
 		var measureNum = 0
 
+		// Prepend a silence measure so NEUTRINO gets an initial pau
+		var restDur = div * sigN * (4 / sigD)
+
 		while (cursor.segment) {
 			var el = cursor.element
 			if (el && el.type === Element.MEASURE) {
@@ -81,6 +84,12 @@ MuseScore {
 					xml += '          <line>2</line>\n'
 					xml += '        </clef>\n'
 					xml += '      </attributes>\n'
+					// Lead-in silence: whole rest
+					xml += '      <note>\n'
+					xml += '        <rest/>\n'
+					xml += '        <duration>' + restDur + '</duration>\n'
+					xml += '        <type>whole</type>\n'
+					xml += '      </note>\n'
 				}
 
 				cursor.next()
