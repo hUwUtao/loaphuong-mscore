@@ -79,11 +79,11 @@ cp loaphuong.exe /tmp/loaphuong-win-dist/
 cp vst3/target/x86_64-pc-windows-gnu/release/loaphuong.dll /tmp/loaphuong-win-dist/loaphuong.vst3/Contents/x86_64-windows/
 cp plugin/loaphuong.qml /tmp/loaphuong-win-dist/
 
-# Deploy VST3 on Windows
-xcopy /s /e loaphuong.vst3 %USERPROFILE%\Documents\VST3\loaphuong.vst3
+# Deploy VST3 on Windows (single-file format — rename .dll to .vst3)
+copy /y loaphuong.dll "C:\Program Files\Common Files\VST3\loaphuong.vst3"
 
 # Deploy QML plugin on Windows
-copy loaphuong.qml %USERPROFILE%\Documents\MuseScore4\Plugins\loaphuong\
+copy loaphuong.qml "%USERPROFILE%\Documents\MuseScore4\Plugins\loaphuong\"
 
 # Install QML plugin (Linux/macOS)
 cp plugin/loaphuong.qml ~/Documents/MuseScore4/Plugins/loaphuong/
