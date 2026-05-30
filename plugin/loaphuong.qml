@@ -19,7 +19,6 @@ MuseScore {
 	property string resultPath: ""
 	property string lastXml: ""
 	property string lastError: ""
-
 	property int lyricNoteCount: 0
 
 	menuPath: "Plugins.loaphuong.Render Vocal"
@@ -65,46 +64,39 @@ MuseScore {
 		return 0
 	}
 
-	function findNoteIdxByTick(tick, list) {
-		for (var i = 0; i < list.length; i++)
-			if (list[i].tick === tick) return i
-		return -1
-	}
 
-	// Write phonemes as Lyric Line 2 — only if note doesn't already have override text
-	function writePhonemesToScore(exportData, noteList) {
+	// Write phonemes as Lyric Line 2 — match by sequential position
+	function writePhonemesToScore(exportData) {
 		var target = findVocalTrack()
-		if (!noteList || noteList.length === 0) return
+		var keys = Object.keys(exportData)
+		if (keys.length === 0) return
 		var cursor = curScore.newCursor()
 		cursor.track = target
 		cursor.rewind(Cursor.SCORE_START)
-		var written = 0, safety = 0
+		var ki = 0, written = 0, safety = 0
 		curScore.startCmd()
 		while (cursor.segment && ++safety < 500) {
 			var e = cursor.element
 			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0
-				&& e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+				&& e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text && ki < keys.length) {
+				var phones = exportData[keys[ki]]
+				ki++
+				if (!phones || phones.length === 0) continue
 				// Skip if Lyric 2 already has user override text
 				if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text && e.lyrics[1].text.length > 0)
 					continue
-				var ni = findNoteIdxByTick(cursor.tick, noteList)
-				if (ni >= 0) {
-					var phones = exportData[noteList[ni].id]
-					if (phones && phones.length > 0) {
-						var txt = phones.join(" ")
-						try {
-							if (e.lyrics.length > 1 && e.lyrics[1]) {
-								e.lyrics[1].text = txt
-							} else {
-								var ly = newElement(Element.LYRICS)
-								ly.text = txt
-								ly.verse = 1
-								cursor.add(ly)
-							}
-							written++
-						} catch (_) {}
+				var txt = phones.join(" ")
+				try {
+					if (e.lyrics.length > 1 && e.lyrics[1]) {
+						e.lyrics[1].text = txt
+					} else {
+						var ly = newElement(Element.LYRICS)
+						ly.text = txt
+						ly.verse = 1
+						cursor.add(ly)
 					}
-				}
+					written++
+				} catch (_) {}
 			}
 			cursor.next()
 		}
@@ -309,10 +301,35 @@ MuseScore {
 				} else {
 					resultPath = res.wavPath || ""
 					hasRender = true
-					var nlist = (res.output && res.output.notes) || []
-					var pExport = (res.output && res.output.phonemeExport) || {}
-					writePhonemesToScore(pExport, nlist)
-					phase = "Done! " + Object.keys(pExport).length + " notes"
+					phase = "Done! " + ((res.output && res.output.phonemeExport) ? Object.keys(res.output.phonemeExport).length + " notes" : "")
+				}
+				rendering = false
+				progress = 1.0
+			})
+		} catch (e) {
+			phase = "Error: " + e
+			rendering = false
+		}
+	}
+
+	function showPhonemes() {
+		if (rendering || !curScore) return
+		rendering = true
+		progress = 0.0
+		phase = "Analyzing..."
+		lastError = ""
+
+		try {
+			var musicXml = generateMusicXml()
+			var bodyObj = { musicxml: musicXml }
+			doRequest("/api/phonemes", bodyObj, function(err, res) {
+				if (err) {
+					lastError = err
+					phase = "Error"
+				} else {
+					var pExport = res.phonemeExport || {}
+					writePhonemesToScore(pExport)
+					phase = Object.keys(pExport).length + " notes written to Lyric 2"
 				}
 				rendering = false
 				progress = 1.0
@@ -367,6 +384,12 @@ MuseScore {
 		RowLayout {
 			Layout.fillWidth: true
 			spacing: 6
+
+			Button {
+				text: "Show Phonemes"
+				enabled: !rendering && curScore != null
+				onClicked: showPhonemes()
+			}
 
 			Button {
 				text: rendering ? "Rendering..." : "Render"
