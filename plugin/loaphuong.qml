@@ -232,9 +232,6 @@ MuseScore {
 				bodyObj.musicxml = musicXml
 			}
 			var body = JSON.stringify(bodyObj)
-				voice: voice,
-				model: model,
-			})
 
 			xhr.send(body)
 		} catch (e) {
