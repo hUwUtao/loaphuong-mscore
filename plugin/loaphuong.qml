@@ -62,7 +62,7 @@ MuseScore {
 				if (e.type === Element.CHORD) {
 					chords++
 					info += " notes=" + (e.notes ? e.notes.length : 0)
-					if (e.lyrics) {
+					if (e.lyrics && e.lyrics.length > 0) {
 						lyrics += e.lyrics.length
 						info += " lyrics=" + e.lyrics.length + "[" + e.lyrics[0].text + "]"
 					}
