@@ -240,6 +240,58 @@ MuseScore {
 		return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;")
 	}
 
+	function doRequest(endpoint, bodyObj, cb) {
+		var xhr = new XMLHttpRequest()
+		xhr.open("POST", backendUrl + endpoint)
+		xhr.setRequestHeader("Content-Type", "application/json")
+
+		xhr.onreadystatechange = function() {
+			try {
+				if (xhr.readyState === 4) {
+					if (xhr.status === 200) cb(null, JSON.parse(xhr.responseText))
+					else cb(xhr.responseText, null)
+				}
+			} catch (e) {
+				cb(String(e), null)
+			}
+		}
+
+		xhr.send(JSON.stringify(bodyObj))
+	}
+
+	function analyzePhonemes(withOverrides) {
+		if (rendering || !curScore) return
+		rendering = true
+		progress = 0.0
+		phase = "Analyzing phonemes..."
+		lastError = ""
+
+		try {
+			var result = generateMusicXml()
+			var bodyObj = { musicxml: result.xml || undefined, scorePath: result.path || undefined }
+			if (withOverrides && hasPins()) bodyObj.phonemeOverrides = pinnedOverrides
+
+			doRequest("/api/phonemes", bodyObj, function(err, res) {
+				if (err) {
+					lastError = err
+					phase = "Error"
+				} else {
+					notes = res.notes || []
+					phonemeExport = res.phonemeExport || {}
+					if (!withOverrides) pinnedOverrides = ({})
+					rebuildNotePairs()
+					var pc = Object.keys(phonemeExport).length
+					phase = pc + " notes analyzed"
+				}
+				rendering = false
+				progress = 1.0
+			})
+		} catch (e) {
+			phase = "Error: " + e
+			rendering = false
+		}
+	}
+
 	function startRender(withOverrides) {
 		if (rendering || !curScore) return
 
@@ -251,62 +303,35 @@ MuseScore {
 
 		try {
 			var result = generateMusicXml()
-			var musicXml = result.xml
-			var exportPath = result.path
-			lastXml = musicXml.length > 2000 ? musicXml.slice(0, 2000) + "..." : musicXml
-			lastError = ""
-			phase = "Sending request..."
-
-			var xhr = new XMLHttpRequest()
-			xhr.open("POST", backendUrl + "/api/render")
-			xhr.setRequestHeader("Content-Type", "application/json")
-
-			xhr.onreadystatechange = function() {
-				try {
-					if (xhr.readyState === 3) {
-						phase = "Processing..."
-					}
-					if (xhr.readyState === 4) {
-						if (xhr.status === 200) {
-							var res = JSON.parse(xhr.responseText)
-							resultPath = res.wavPath || ""
-							hasRender = true
-
-							// Load phoneme data
-							if (res.output) {
-								notes = res.output.notes || []
-								phonemeExport = res.output.phonemeExport || {}
-								if (!withOverrides) pinnedOverrides = ({})
-								rebuildNotePairs()
-							}
-
-							var pc = Object.keys(phonemeExport).length
-							phase = "Done! " + pc + " notes with phonemes"
-						} else {
-							lastError = xhr.responseText
-							phase = "Error: " + xhr.status
-						}
-						rendering = false
-						progress = 1.0
-					}
-				} catch (e) {
-					console.log("loaphuong: xhr cb error: " + e)
-				}
-			}
-
 			var bodyObj = { voice: voice, model: model }
 			if (withOverrides && hasPins())
 				bodyObj.phonemeOverrides = pinnedOverrides
-			if (exportPath) {
-				bodyObj.scorePath = exportPath
-			} else {
-				bodyObj.musicxml = musicXml
-			}
-			var body = JSON.stringify(bodyObj)
+			if (result.path) bodyObj.scorePath = result.path
+			else bodyObj.musicxml = result.xml
 
-			xhr.send(body)
+			lastXml = result.xml ? (result.xml.length > 2000 ? result.xml.slice(0, 2000) + "..." : result.xml) : result.path
+			lastError = ""
+			phase = "Rendering..."
+
+			doRequest("/api/render", bodyObj, function(err, res) {
+				if (err) {
+					lastError = err
+					phase = "Error"
+				} else {
+					resultPath = res.wavPath || ""
+					hasRender = true
+					if (res.output) {
+						notes = res.output.notes || []
+						phonemeExport = res.output.phonemeExport || {}
+						if (!withOverrides) pinnedOverrides = ({})
+						rebuildNotePairs()
+					}
+					phase = "Done! " + Object.keys(phonemeExport).length + " notes"
+				}
+				rendering = false
+				progress = 1.0
+			})
 		} catch (e) {
-			console.log("loaphuong: render error: " + e)
 			phase = "Error: " + e
 			rendering = false
 		}
@@ -358,14 +383,21 @@ MuseScore {
 			spacing: 6
 
 			Button {
-				text: rendering ? "..." : "Render"
+				text: "Analyze"
 				enabled: !rendering && curScore != null
+				onClicked: analyzePhonemes(false)
+			}
+
+			Button {
+				text: "Render"
+				enabled: !rendering && curScore != null
+				Layout.fillWidth: true
 				onClicked: startRender(false)
 			}
 
 			Button {
 				text: "Re-render"
-				enabled: !rendering && hasRender && hasPins()
+				enabled: !rendering && hasPins()
 				highlighted: hasPins()
 				onClicked: startRender(true)
 			}
@@ -375,20 +407,25 @@ MuseScore {
 				enabled: hasRender && resultPath !== ""
 				onClicked: { if (resultPath) Qt.openUrlExternally("file://" + resultPath) }
 			}
+		}
 
-			Item { Layout.fillWidth: true }
+		RowLayout {
+			Layout.fillWidth: true
+			spacing: 6
 
 			Button {
 				text: "Pin all"
-				enabled: hasRender && !rendering
+				enabled: notePairs.length > 0 && !rendering
 				onClicked: pinAll()
 			}
 
 			Button {
-				text: "Unpin"
-				enabled: hasRender && !rendering && hasPins()
+				text: "Unpin all"
+				enabled: hasPins() && !rendering
 				onClicked: unpinAll()
 			}
+
+			Item { Layout.fillWidth: true }
 		}
 
 		ProgressBar {
