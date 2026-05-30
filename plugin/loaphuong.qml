@@ -47,10 +47,6 @@ MuseScore {
 		return Math.floor(p / 12) - 1
 	}
 
-	function getExportPath() {
-		return "/tmp/loaphuong_export.musicxml"
-	}
-
 	function findVocalTrack() {
 		var nstaves = curScore.nstaves || 1
 		for (var t = 0; t < nstaves * 4; t++) {
@@ -141,36 +137,6 @@ MuseScore {
 		var target = findVocalTrack()
 		var info = "target track=" + target + " nstaves=" + nstaves + "\n"
 
-		var exportPath = getExportPath()
-		try {
-			curScore.startCmd()
-			for (var t = 0; t < nstaves * 4; t++) {
-				if (t !== target) {
-					var dc = curScore.newCursor()
-					dc.track = t
-					dc.rewind(Cursor.SCORE_START)
-					while (dc.segment) {
-						var el = dc.element
-						if (el) curScore.removeElement(el)
-						dc.next()
-					}
-				}
-			}
-			var ok = writeScore(curScore, exportPath, "musicxml")
-			curScore.endCmd()
-			cmd("undo")
-			if (ok) {
-				info += "writeScore -> " + exportPath
-				lastXml = info
-				return { path: exportPath, xml: "" }
-			}
-		} catch (e) {
-			try { curScore.endCmd() } catch (_) {}
-			try { cmd("undo") } catch (_) {}
-			info += "writeScore failed: " + e + "\n"
-		}
-
-		info += "Falling back to manual generation\n"
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
 		var div = curScore.division || 480
@@ -241,7 +207,7 @@ MuseScore {
 
 		info += "measures=" + numMeasures + " notes=" + allNotes.length
 		lastXml = info + "\n---\n" + xml.slice(0, 1500)
-		return { path: "", xml: xml }
+		return xml
 	}
 
 	function escapeXml(s) {
@@ -271,8 +237,8 @@ MuseScore {
 		lastError = ""
 
 		try {
-			var result = generateMusicXml()
-			var bodyObj = { musicxml: result.xml || undefined, scorePath: result.path || undefined }
+			var musicXml = generateMusicXml()
+			var bodyObj = { musicxml: musicXml }
 			doRequest("/api/phonemes", bodyObj, function(err, res) {
 				if (err) {
 					lastError = err
@@ -306,11 +272,10 @@ MuseScore {
 			if (withOverrides)
 				bodyObj.phonemeOverrides = readPhonemesFromScore()
 
-			var result = generateMusicXml()
-			if (result.path) bodyObj.scorePath = result.path
-			else bodyObj.musicxml = result.xml
+			var musicXml = generateMusicXml()
+			bodyObj.musicxml = musicXml
 
-			lastXml = result.xml ? (result.xml.length > 2000 ? result.xml.slice(0, 2000) + "..." : result.xml) : result.path
+			lastXml = musicXml.length > 2000 ? musicXml.slice(0, 2000) + "..." : musicXml
 			lastError = ""
 			phase = "Rendering..."
 
