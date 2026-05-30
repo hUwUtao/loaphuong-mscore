@@ -65,7 +65,7 @@ MuseScore {
 	}
 
 
-	// Write phonemes as Lyric Line 2 — match by sequential position
+	// Write phonemes as Lyric Line 2 — only on root notes (single/begin), skip melisma tails
 	function writePhonemesToScore(exportData) {
 		var target = findVocalTrack()
 		var keys = Object.keys(exportData)
@@ -82,6 +82,9 @@ MuseScore {
 				var phones = exportData[keys[ki]]
 				ki++
 				if (!phones || phones.length === 0) continue
+				// Only write for root notes (single=0, begin=1), skip melisma tails
+				var syl = e.lyrics[0].syllabic
+				if (syl !== 0 && syl !== 1) continue
 				// Skip if Lyric 2 already has user override text
 				if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text && e.lyrics[1].text.length > 0)
 					continue
@@ -102,6 +105,34 @@ MuseScore {
 		}
 		curScore.endCmd()
 		lyricNoteCount = written
+	}
+
+	// Read Lyric Line 2 — only from root notes (single/begin), skip melisma tails
+	function readPhonemesFromScore() {
+		var target = findVocalTrack()
+		var overrides = []
+		var cursor = curScore.newCursor()
+		cursor.track = target
+		cursor.rewind(Cursor.SCORE_START)
+		var safety = 0
+		while (cursor.segment && ++safety < 500) {
+			var e = cursor.element
+			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
+				var txt = ""
+				if (e.lyrics && e.lyrics.length > 0 && e.lyrics[0].text) {
+					var syl = e.lyrics[0].syllabic
+					if (syl === 0 || syl === 1) {
+						try {
+							if (e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text)
+								txt = e.lyrics[1].text
+						} catch (_) {}
+					}
+				}
+				overrides.push(txt.length > 0 ? txt.split(" ") : [])
+			}
+			cursor.next()
+		}
+		return overrides
 	}
 
 	function generateMusicXml() {
