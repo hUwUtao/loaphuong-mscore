@@ -69,21 +69,28 @@ MuseScore {
 		return 0
 	}
 
-	// Write phonemes as Lyric Line 2 in the score
+	function findNoteIdxByTick(tick) {
+		for (var i = 0; i < notes.length; i++)
+			if (notes[i].tick === tick) return i
+		return -1
+	}
+
+	// Write phonemes as Lyric Line 2 — match by tick
 	function writePhonemesToScore(exportData) {
 		var target = findVocalTrack()
-		var keys = Object.keys(exportData)
 		var cursor = curScore.newCursor()
 		cursor.track = target
 		cursor.rewind(Cursor.SCORE_START)
-		var vi = 0
+		var written = 0
 		var safety = 0
 		curScore.startCmd()
 		while (cursor.segment && ++safety < 500) {
 			var e = cursor.element
 			if (e && e.type === Element.CHORD && e.notes && e.notes.length > 0) {
-				if (vi < keys.length) {
-					var phones = exportData[keys[vi]]
+				var ni = findNoteIdxByTick(cursor.tick)
+				if (ni >= 0) {
+					var nid = notes[ni].id
+					var phones = exportData[nid]
 					if (phones && phones.length > 0) {
 						var txt = phones.join(" ")
 						try {
@@ -95,18 +102,18 @@ MuseScore {
 								ly.verse = 1
 								cursor.add(ly)
 							}
+							written++
 						} catch (_) {}
 					}
 				}
-				vi++
 			}
 			cursor.next()
 		}
 		curScore.endCmd()
-		lyricNoteCount = vi
+		lyricNoteCount = written
 	}
 
-	// Read Lyric Line 2 as override array (by note position)
+	// Read Lyric Line 2 — iterate ALL chords to align with MusicXML order
 	function readPhonemesFromScore() {
 		var target = findVocalTrack()
 		var overrides = []
@@ -122,10 +129,7 @@ MuseScore {
 					if (e.lyrics && e.lyrics.length > 1 && e.lyrics[1] && e.lyrics[1].text)
 						txt = e.lyrics[1].text
 				} catch (_) {}
-				if (txt.length > 0)
-					overrides.push(txt.split(" "))
-				else
-					overrides.push([])
+				overrides.push(txt.length > 0 ? txt.split(" ") : [])
 			}
 			cursor.next()
 		}
