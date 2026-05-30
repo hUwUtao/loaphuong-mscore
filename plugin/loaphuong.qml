@@ -5,8 +5,8 @@ import QtQuick.Layouts 1.15
 
 MuseScore {
 	id: root
-	width: 420
-	height: 520
+	width: 500
+	height: 600
 
 	property string backendUrl: "http://127.0.0.1:3100"
 	property string voice: "MERROW"
@@ -20,11 +20,72 @@ MuseScore {
 	property string lastXml: ""
 	property string lastError: ""
 
+	// Phoneme override state
+	property var phonemeExport: ({})
+	property var pinnedOverrides: ({})
+	property var notes: []       // output.notes from last response
+	property var notePairs: []   // [{id, lyric, phonemes:"s i n", pinned:bool}]
+
 	menuPath: "Plugins.loaphuong.Render Vocal"
 	description: "Render vocal track via Loaphuong gen backend"
 	version: "0.1.0"
 	pluginType: "dialog"
 	dockArea: "none"
+
+	function rebuildNotePairs() {
+		var pairs = []
+		var keys = Object.keys(phonemeExport)
+		for (var i = 0; i < keys.length; i++) {
+			var id = keys[i]
+			var lyric = ""
+			for (var j = 0; j < notes.length; j++) {
+				if (notes[j].id === id) { lyric = notes[j].lyric || ""; break }
+			}
+			pairs.push({
+				id: id,
+				lyric: lyric,
+				phonemes: phonemeExport[id].join(" "),
+				pinned: !!pinnedOverrides[id]
+			})
+		}
+		notePairs = pairs
+	}
+
+	function togglePin(noteId) {
+		if (pinnedOverrides[noteId]) {
+			var copy = {}
+			var keys = Object.keys(pinnedOverrides)
+			for (var i = 0; i < keys.length; i++)
+				if (keys[i] !== noteId) copy[keys[i]] = pinnedOverrides[keys[i]]
+			pinnedOverrides = copy
+		} else {
+			var copy = {}
+			var keys = Object.keys(pinnedOverrides)
+			for (var i = 0; i < keys.length; i++)
+				copy[keys[i]] = pinnedOverrides[keys[i]]
+			copy[noteId] = phonemeExport[noteId]
+			pinnedOverrides = copy
+		}
+		rebuildNotePairs()
+	}
+
+	function pinAll() {
+		var copy = {}
+		var keys = Object.keys(phonemeExport)
+		for (var i = 0; i < keys.length; i++)
+			copy[keys[i]] = phonemeExport[keys[i]]
+		pinnedOverrides = copy
+		rebuildNotePairs()
+	}
+
+	function unpinAll() {
+		pinnedOverrides = ({})
+		rebuildNotePairs()
+	}
+
+	function hasPins() {
+		return Object.keys(pinnedOverrides).length > 0
+	}
 
 	onRun: {
 		try {
@@ -72,7 +133,6 @@ MuseScore {
 		var target = findVocalTrack()
 		var info = "target track=" + target + " nstaves=" + nstaves + "\n"
 
-		// Try writeScore (destructive isolation + export + undo)
 		var exportPath = getExportPath()
 		try {
 			curScore.startCmd()
@@ -102,7 +162,6 @@ MuseScore {
 			info += "writeScore failed: " + e + "\n"
 		}
 
-		// Fallback: manual generation from all tracks
 		info += "Falling back to manual generation\n"
 		var sigN = curScore.timesigNumerator || 4
 		var sigD = curScore.timesigDenominator || 4
@@ -181,7 +240,7 @@ MuseScore {
 		return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;")
 	}
 
-	function startRender() {
+	function startRender(withOverrides) {
 		if (rendering || !curScore) return
 
 		rendering = true
@@ -212,7 +271,17 @@ MuseScore {
 							var res = JSON.parse(xhr.responseText)
 							resultPath = res.wavPath || ""
 							hasRender = true
-							phase = "Done!"
+
+							// Load phoneme data
+							if (res.output) {
+								notes = res.output.notes || []
+								phonemeExport = res.output.phonemeExport || {}
+								if (!withOverrides) pinnedOverrides = ({})
+								rebuildNotePairs()
+							}
+
+							var pc = Object.keys(phonemeExport).length
+							phase = "Done! " + pc + " notes with phonemes"
 						} else {
 							lastError = xhr.responseText
 							phase = "Error: " + xhr.status
@@ -226,6 +295,8 @@ MuseScore {
 			}
 
 			var bodyObj = { voice: voice, model: model }
+			if (withOverrides && hasPins())
+				bodyObj.phonemeOverrides = pinnedOverrides
 			if (exportPath) {
 				bodyObj.scorePath = exportPath
 			} else {
@@ -243,8 +314,8 @@ MuseScore {
 
 	ColumnLayout {
 		anchors.fill: parent
-		anchors.margins: 16
-		spacing: 12
+		anchors.margins: 12
+		spacing: 8
 
 		GroupBox {
 			title: "Voice"
@@ -253,7 +324,7 @@ MuseScore {
 			GridLayout {
 				columns: 2
 				columnSpacing: 8
-				rowSpacing: 8
+				rowSpacing: 6
 				anchors.left: parent.left
 				anchors.right: parent.right
 
@@ -284,31 +355,39 @@ MuseScore {
 
 		RowLayout {
 			Layout.fillWidth: true
-			spacing: 8
+			spacing: 6
 
 			Button {
-				text: rendering ? "Rendering..." : "Render"
-				Layout.fillWidth: true
+				text: rendering ? "..." : "Render"
 				enabled: !rendering && curScore != null
-				onClicked: startRender()
+				onClicked: startRender(false)
+			}
+
+			Button {
+				text: "Re-render"
+				enabled: !rendering && hasRender && hasPins()
+				highlighted: hasPins()
+				onClicked: startRender(true)
 			}
 
 			Button {
 				text: "Play"
 				enabled: hasRender && resultPath !== ""
-				onClicked: {
-					if (resultPath)
-						Qt.openUrlExternally("file://" + resultPath)
-				}
+				onClicked: { if (resultPath) Qt.openUrlExternally("file://" + resultPath) }
+			}
+
+			Item { Layout.fillWidth: true }
+
+			Button {
+				text: "Pin all"
+				enabled: hasRender && !rendering
+				onClicked: pinAll()
 			}
 
 			Button {
-				text: "Cancel"
-				enabled: rendering
-				onClicked: {
-					rendering = false
-					phase = "Cancelled"
-				}
+				text: "Unpin"
+				enabled: hasRender && !rendering && hasPins()
+				onClicked: unpinAll()
 			}
 		}
 
@@ -326,13 +405,66 @@ MuseScore {
 			font.pixelSize: 12
 		}
 
-		Item { Layout.fillHeight: true }
+		// Phoneme table
+		Frame {
+			Layout.fillWidth: true
+			Layout.fillHeight: true
+			visible: hasRender && notePairs.length > 0
+			clip: true
+			padding: 4
 
-		// Debug panel — show on error or after render
+			ListView {
+				id: phonemeList
+				anchors.fill: parent
+				model: notePairs
+				spacing: 2
+				clip: true
+
+				delegate: RowLayout {
+					width: phonemeList.width
+					spacing: 6
+					height: 22
+
+					Label {
+						text: modelData.id
+						color: "#64748b"
+						font.pixelSize: 10
+						font.family: "monospace"
+						Layout.preferredWidth: 70
+					}
+
+					Label {
+						text: modelData.lyric
+						font.pixelSize: 11
+						font.bold: true
+						Layout.preferredWidth: 50
+					}
+
+					Label {
+						text: modelData.phonemes
+						color: "#a78bfa"
+						font.pixelSize: 10
+						font.family: "monospace"
+						Layout.fillWidth: true
+						elide: Text.ElideRight
+					}
+
+					Button {
+						text: modelData.pinned ? "\u25C9" : "\u25CB"
+						flat: true
+						implicitWidth: 24
+						implicitHeight: 20
+						onClicked: togglePin(modelData.id)
+					}
+				}
+			}
+		}
+
+		// Debug panel
 		Rectangle {
 			Layout.fillWidth: true
-			Layout.maximumHeight: 150
-			visible: lastError !== "" || lastXml !== ""
+			Layout.maximumHeight: 80
+			visible: lastError !== ""
 			color: "#1e1e2e"
 			radius: 4
 			clip: true
@@ -340,11 +472,8 @@ MuseScore {
 			ScrollView {
 				anchors.fill: parent
 				anchors.margins: 4
-
 				Label {
-					text: lastError !== ""
-						? "Server:\n" + lastError
-						: "MusicXML:\n" + lastXml
+					text: "Server:\n" + lastError
 					color: "#cdd6f4"
 					font.pixelSize: 9
 					font.family: "monospace"
@@ -357,7 +486,7 @@ MuseScore {
 		Label {
 			text: curScore ? (curScore.title || "Untitled") + " \u00B7 " + curScore.nmeasures + " measures" : "No score open"
 			color: "#94a3b8"
-			font.pixelSize: 11
+			font.pixelSize: 10
 		}
 	}
 }
