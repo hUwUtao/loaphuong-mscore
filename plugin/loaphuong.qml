@@ -216,7 +216,8 @@ MuseScore {
 						+ '<duration>' + an.dur + '</duration><type>quarter</type>'
 					if (an.lyric) {
 						var syl = ["single","begin","end","middle"][an.lyric.syllabic] || "single"
-						xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(an.lyric.text) + '</text></lyric>'
+						var txt = stripHtml(an.lyric.text)
+						xml += '<lyric><syllabic>' + syl + '</syllabic><text>' + escapeXml(txt) + '</text></lyric>'
 					}
 					xml += '</note>\n'
 					restTick = an.tick + an.dur
@@ -235,6 +236,10 @@ MuseScore {
 		info += "measures=" + numMeasures + " notes=" + allNotes.length
 		lastXml = info + "\n---\n" + xml.slice(0, 1500)
 		return xml
+	}
+
+	function stripHtml(s) {
+		return s.replace(/<[^>]*>/g, "").trim()
 	}
 
 	function escapeXml(s) {
