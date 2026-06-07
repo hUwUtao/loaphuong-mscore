@@ -112,6 +112,7 @@ MuseScore {
 	}
 
 	// Read Lyric Line 2 — only from root notes (single/begin), skip melisma tails
+	// Supports pipe syntax (override.txt format) and space-separated phonemes.
 	function readPhonemesFromScore() {
 		var target = findVocalTrack()
 		var overrides = []
@@ -132,7 +133,9 @@ MuseScore {
 						} catch (_) {}
 					}
 				}
-				overrides.push(txt.length > 0 ? txt.split(" ") : [])
+				// Pipe syntax: push full text as single element for backend parsing
+				// Space-separated phones: split as before for backward compat
+				overrides.push(txt.length > 0 ? (txt.indexOf("|") >= 0 ? [txt] : txt.split(" ")) : [])
 			}
 			cursor.next()
 		}
